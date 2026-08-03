@@ -5,8 +5,10 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO, TextIOWrapper
@@ -262,7 +264,7 @@ class ExplicitTransferTests(unittest.TestCase):
         self.assertIn("Created symlink test", result.stderr)
 
     @unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
-    def test_powershell_wrapper_preserves_multiline_exec_quotes(self):
+    def test_powershell_wrapper_preserves_exec_options_and_multiline_quotes(self):
         wrapper = MODULE_PATH.parents[2] / "linode-runner.ps1"
         remote_command = "python3 - <<'PY'\nprint(\"quoted value\")\nPY"
         with tempfile.TemporaryDirectory() as temporary:
@@ -274,9 +276,10 @@ class ExplicitTransferTests(unittest.TestCase):
             controller.write_text(
                 "import base64\n"
                 "import sys\n"
-                "assert sys.argv[1:3] == ['exec', '--']\n"
-                "assert sys.argv[3] == '--encoded-command'\n"
-                "print(base64.b64decode(sys.argv[4]).decode('utf-8'))\n",
+                "assert sys.argv[1:5] == "
+                "['exec', '--timeout-seconds', '7', '--']\n"
+                "assert sys.argv[5] == '--encoded-command'\n"
+                "print(base64.b64decode(sys.argv[6]).decode('utf-8'))\n",
                 encoding="utf-8",
             )
             local_app_data = root / "local-app-data"
@@ -289,7 +292,7 @@ class ExplicitTransferTests(unittest.TestCase):
                 "$remote = @'\n"
                 f"{remote_command}\n"
                 "'@\n"
-                f"& '{copied_wrapper}' exec -- $remote\n"
+                f"& '{copied_wrapper}' exec --timeout-seconds 7 -- $remote\n"
                 "exit $LASTEXITCODE"
             )
             environment = os.environ.copy()
@@ -599,6 +602,84 @@ class InterruptedBootstrapRecoveryTests(unittest.TestCase):
 
 
 class RemoteExecDiagnosticsTests(unittest.TestCase):
+    def test_exec_forwards_explicit_timeout_to_ssh(self):
+        result = subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        with (
+            mock.patch.object(runner, "LinodeApi"),
+            mock.patch.object(runner, "load_current", return_value={"run_id": "r"}),
+            mock.patch.object(runner, "ssh_command", return_value=result) as ssh,
+        ):
+            exit_code = runner.main(
+                ["exec", "--timeout-seconds", "7", "--", "true"]
+            )
+
+        self.assertEqual(exit_code, 0)
+        ssh.assert_called_once_with(
+            {"run_id": "r"},
+            "true",
+            capture=True,
+            timeout=7,
+        )
+
+    def test_exec_rejects_nonpositive_timeout_before_ssh(self):
+        with (
+            mock.patch.object(runner, "LinodeApi"),
+            mock.patch.object(runner, "load_current", return_value={"run_id": "r"}),
+            mock.patch.object(runner, "ssh_command") as ssh,
+            mock.patch("sys.stderr", new_callable=StringIO) as stderr,
+        ):
+            exit_code = runner.main(
+                ["exec", "--timeout-seconds", "0", "--", "true"]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("--timeout-seconds must be positive", stderr.getvalue())
+        ssh.assert_not_called()
+
+    def test_exec_reports_timeout_without_replaying_partial_output(self):
+        timeout = subprocess.TimeoutExpired(
+            cmd=["ssh"],
+            timeout=7,
+            output="partial stdout",
+            stderr="partial stderr",
+        )
+        with (
+            mock.patch.object(runner, "LinodeApi"),
+            mock.patch.object(runner, "load_current", return_value={"run_id": "r"}),
+            mock.patch.object(runner, "ssh_command", side_effect=timeout) as ssh,
+            mock.patch("sys.stdout", new_callable=StringIO) as stdout,
+            mock.patch("sys.stderr", new_callable=StringIO) as stderr,
+        ):
+            exit_code = runner.main(
+                ["exec", "--timeout-seconds", "7", "--", "true"]
+            )
+
+        self.assertEqual(exit_code, 1)
+        ssh.assert_called_once_with(
+            {"run_id": "r"},
+            "true",
+            capture=True,
+            timeout=7,
+        )
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("timed out after 7 seconds", stderr.getvalue())
+
+    def test_bounded_command_terminates_a_nonreturning_child(self):
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            runner.run_local(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                timeout=0.1,
+                capture=True,
+            )
+
+        self.assertLess(time.monotonic() - started, 5)
+
     def test_exec_reconfigures_narrow_streams_to_preserve_remote_unicode(self):
         result = subprocess.CompletedProcess(
             args=["ssh"],

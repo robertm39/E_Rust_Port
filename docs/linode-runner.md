@@ -322,6 +322,22 @@ This preserves embedded quotes and multiline here-docs across Windows
 PowerShell's native argument boundary. The Python controller strictly validates
 and decodes that internal transport before SSH execution.
 
+Short, idempotent control-plane probes may bound the local SSH invocation:
+
+```powershell
+.\linode-runner.ps1 exec --timeout-seconds 90 -- `
+    "systemctl show example.service -p ActiveState -p MainPID"
+```
+
+Use this only for commands such as `systemctl show`, `find`, `wc`, or
+`sha256sum` that should finish well inside the deadline. A local SSH timeout
+closes the transport but cannot guarantee that an arbitrary long-running remote
+process received termination; it is not a substitute for systemd runtime
+limits, remote `timeout`, or the guarded lifecycle around builds, provers,
+archives, and other long work. The CASC checkpoint controller uses a 90-second
+bound for service, inventory, and archive-hash probes while leaving launch and
+capture commands on their purpose-specific lifecycle limits.
+
 ```powershell
 .\linode-runner.ps1 up
 try {

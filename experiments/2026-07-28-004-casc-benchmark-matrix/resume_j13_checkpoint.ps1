@@ -41,6 +41,7 @@ $vampireSha256 = (
     "3fd88f402d2b74ddf6bf96d49a2bf3c9383710b19d1c9c2c5ecb740265a5c665"
 )
 $serviceRuntimeSeconds = $MaxSessionWallSeconds + 300
+$runnerProbeTimeoutSeconds = 90
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 $releaseConfig = switch ($Release) {
@@ -384,6 +385,18 @@ function Invoke-Runner {
     return ($output -join "`n")
 }
 
+function Invoke-RunnerProbe {
+    param([Parameter(Mandatory = $true)][string]$RemoteCommand)
+
+    return Invoke-Runner @(
+        "exec",
+        "--timeout-seconds",
+        [string]$runnerProbeTimeoutSeconds,
+        "--",
+        $RemoteCommand
+    )
+}
+
 function Invoke-CheckpointValidator {
     param(
         [Parameter(Mandatory = $true)][string]$Archive,
@@ -512,9 +525,7 @@ function Get-ServiceProperties {
         "ActiveState,SubState,MainPID,InvocationID,NRestarts,Result," +
         "ExecMainStatus"
     )
-    $raw = Invoke-Runner @(
-        "exec",
-        "--",
+    $raw = Invoke-RunnerProbe -RemoteCommand (
         "systemctl show $Unit --property=$fields"
     )
     return ConvertFrom-SystemdProperties -Text $raw
@@ -792,9 +803,7 @@ PY
         if ([string]$properties.MainPID -ne $expectedMainPid) {
             throw "Transient service main PID changed while active"
         }
-        $resultCount = Invoke-Runner @(
-            "exec",
-            "--",
+        $resultCount = Invoke-RunnerProbe -RemoteCommand (
             "find '$runRoot/results' -type f -name '*.json' | wc -l"
         )
         Write-ResumeLog "service_active result_count=$($resultCount.Trim())"
@@ -849,7 +858,9 @@ tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf '$remoteArch
 "@
     Invoke-Runner @("exec", "--", $captureCommand) | Out-Null
 
-    $remoteHashLine = Invoke-Runner @("exec", "--", "sha256sum '$remoteArchive'")
+    $remoteHashLine = Invoke-RunnerProbe -RemoteCommand (
+        "sha256sum '$remoteArchive'"
+    )
     $remoteHash = ($remoteHashLine -split "\s+", 2)[0].ToLowerInvariant()
     if ($remoteHash -notmatch "^[0-9a-f]{64}$") {
         throw "Could not parse the remote checkpoint SHA-256"
@@ -862,9 +873,7 @@ tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf '$remoteArch
         throw "Downloaded checkpoint SHA-256 does not match the remote archive"
     }
 
-    $finalCountText = Invoke-Runner @(
-        "exec",
-        "--",
+    $finalCountText = Invoke-RunnerProbe -RemoteCommand (
         "find '$runRoot/results' -type f -name '*.json' | wc -l"
     )
     $finalCount = 0

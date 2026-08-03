@@ -2877,6 +2877,11 @@ def parser() -> argparse.ArgumentParser:
     download.add_argument("local_path", type=Path)
     download.add_argument("--overwrite", action="store_true")
     execute = commands.add_parser("exec", help="run a command on the active runner")
+    execute.add_argument(
+        "--timeout-seconds",
+        type=int,
+        help="bound the local SSH invocation to this many seconds",
+    )
     execute.add_argument("remote_command", nargs=argparse.REMAINDER)
     refresh = commands.add_parser(
         "refresh-ip", help="replace the firewall SSH source address"
@@ -2982,6 +2987,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Downloaded {arguments.remote_path} to {arguments.local_path}")
         elif arguments.command == "exec":
             state = load_current()
+            if (
+                arguments.timeout_seconds is not None
+                and arguments.timeout_seconds <= 0
+            ):
+                raise RunnerError("--timeout-seconds must be positive")
             remote_arguments = list(arguments.remote_command)
             if remote_arguments and remote_arguments[0] == "--":
                 remote_arguments.pop(0)
@@ -3005,11 +3015,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise RunnerError("Encoded remote command is empty")
             else:
                 remote_command = " ".join(remote_arguments)
-            result = ssh_command(
-                state,
-                remote_command,
-                capture=True,
-            )
+            ssh_arguments: dict[str, Any] = {"capture": True}
+            if arguments.timeout_seconds is not None:
+                ssh_arguments["timeout"] = arguments.timeout_seconds
+            result = ssh_command(state, remote_command, **ssh_arguments)
             if result.stdout:
                 print(result.stdout, end="")
             if result.stderr:

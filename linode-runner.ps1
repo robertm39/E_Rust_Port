@@ -188,6 +188,20 @@ if (-not (Test-Path -LiteralPath $secretPath -PathType Leaf)) {
 $pythonRunnerArguments = $RunnerArguments
 if ($Command -eq "exec") {
     $remoteArguments = @($RunnerArguments)
+    $execArguments = @()
+    if (
+        $remoteArguments.Count -gt 0 -and
+        $remoteArguments[0] -eq "--timeout-seconds"
+    ) {
+        if ($remoteArguments.Count -lt 2) {
+            throw "--timeout-seconds requires a value"
+        }
+        $execArguments = @(
+            "--timeout-seconds",
+            $remoteArguments[1]
+        )
+        $remoteArguments = @($remoteArguments | Select-Object -Skip 2)
+    }
     if ($remoteArguments.Count -gt 0 -and $remoteArguments[0] -eq "--") {
         $remoteArguments = @($remoteArguments | Select-Object -Skip 1)
     }
@@ -200,7 +214,9 @@ if ($Command -eq "exec") {
     )
     # Windows PowerShell's native argument marshalling removes embedded quote
     # characters.  Encode the complete command before crossing that boundary.
-    $pythonRunnerArguments = @("--", "--encoded-command", $encodedCommand)
+    $pythonRunnerArguments = @(
+        $execArguments + @("--", "--encoded-command", $encodedCommand)
+    )
 }
 
 $tokenPointer = [IntPtr]::Zero

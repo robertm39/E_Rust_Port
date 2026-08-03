@@ -794,6 +794,59 @@ handling.  Its limit is deliberate: invalid remote byte sequences are still
 handled by the existing SSH subprocess decoding policy rather than guessed at
 this presentation boundary.
 
+## Bounded controller probes
+
+Question: can a connected but nonreturning SSH session prevent the guarded
+controller from observing service completion and capturing a checkpoint?  The
+live J13 slice supplied a direct falsification.  Controller PID `4796` entered
+its `systemctl show` probe at `2026-08-03T15:54:49Z`; local Python PIDs `14704`
+and `17260` plus OpenSSH PID `984` remained alive for more than seven minutes.
+Remote sshd PID `47776` had no command child and waited in `do_poll`, while
+separate exact probes succeeded.  The benchmark itself retained MainPID `3995`,
+InvocationID `a38a1c59ffc94f0784a26b23f541a1b7`, zero restarts, and one solver
+cgroup while its canonical inventory advanced from 1,306 to 1,338 results.
+The failure was therefore a controller transport hang, not a service stall.
+
+The generic `exec` dispatch previously called `ssh_command(..., timeout=None)`.
+SSH's ten-second connection timeout and 15-second keepalive/four-miss policy do
+not bound a session that remains connected, so the controller's own monitoring
+deadline could never be evaluated.  `exec` now accepts an explicit positive
+`--timeout-seconds` before the remote `--` remainder.  The PowerShell wrapper
+preserves that local option while continuing to base64-encode only the complete
+remote command.  The resume controller routes all short `systemctl`, result
+count, archive-hash, and final-count probes through a 90-second helper; that is
+strictly inside its 300-second monitoring slack.  Long preflight, launch,
+capture, transfer, and cleanup operations retain their existing lifecycle
+limits rather than inheriting the probe deadline.  Any future probe timeout is
+reported by the CLI, logged as `controller_failed`, and follows the existing
+`runner_retained_for_recovery` branch after a launch.
+
+Reproduction and validation commands are:
+
+```powershell
+python -m unittest tools/linode-runner/test_linode_runner.py `
+    experiments/2026-07-28-004-casc-benchmark-matrix/test_resume_j13_checkpoint.py -v
+.\linode-runner.ps1 exec --timeout-seconds 15 -- `
+    "systemctl show casc-j13-v2-resume-260803-135624-bc09.service -p ActiveState -p MainPID -p InvocationID -p NRestarts"
+```
+
+The automated nonreturning-child regression terminates locally within a
+0.1-second deadline and a five-second outer assertion.  The real bounded
+`systemctl show` completed in 0.8 seconds.  A deliberately isolated live
+`exec -a umlaut-probe-timeout-0dbd0ca4 sleep 30` failed after 2.246 seconds,
+proving the local deadline; it also established an important limit: an
+arbitrary remote process can briefly survive SSH transport termination.  The
+test detected and killed only that exact synthetic PID, and a second bounded
+probe proved zero residue.  Consequently this facility is deliberately for
+short, read-only probes, not remote workload supervision.
+
+The already running controller loaded the preceding script and remains blocked
+in its original child; changing repository files cannot repair its in-memory
+call.  It is left untouched so it cannot be forced into premature recovery
+retention while the healthy service runs.  The current slice still requires a
+verified recovery capture, and the timeout fix must be in place before any
+successor controller is launched.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
