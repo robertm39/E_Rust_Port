@@ -682,6 +682,50 @@ task remains `Ready` for `2026-08-03T05:00:10Z`.  Its final scheduler audit
 also requires network availability, wakes the machine, starts when available,
 ignores duplicate instances, and retains the eight-hour execution ceiling.
 
+## Durable successor scheduling
+
+Repeated daily checkpoint slices made the manual Task Scheduler handoff a
+campaign risk: a detached PowerShell process had already disappeared silently,
+while the manually registered task survived.  The tracked
+`schedule_casc_resume.ps1` now makes that handoff reproducible.  Its default is
+nonmutating.  It requires the planner's exact schema and `ready_to_arm` state,
+an incomplete canonical release total, a hash-matching checkpoint and exact
+controller inside the repository, six ordered controller flag/value pairs plus
+`-Execute`, a future unavailable-now allowance, matching batch/service
+durations, and a zero-to-60-second boundary guard.  Immediate-start plans must
+be executed directly instead of being disguised as scheduled work.
+
+Explicit `-Register` refuses replacement and creates one current-user task with
+the validated UTC trigger, exact action and working directory, wake/network and
+missed-start handling, battery-safe continuity, duplicate suppression, and a
+finite execution ceiling.  `-Audit` resolves the task principal to its SID and
+requires the trigger, action, principal, logon/run level, and every guarded
+setting to match before emitting machine-readable evidence.  It neither embeds
+credentials nor trusts the human-readable task name alone.
+
+Reproduction commands are:
+
+```powershell
+.\experiments\2026-07-28-004-casc-benchmark-matrix\schedule_casc_resume.ps1 `
+    -Plan .artifacts\casc-benchmark\j13-965-next-resume-plan-260803.json
+.\experiments\2026-07-28-004-casc-benchmark-matrix\schedule_casc_resume.ps1 `
+    -Plan .artifacts\casc-benchmark\j13-965-next-resume-plan-260803.json `
+    -Audit
+python experiments/2026-07-28-004-casc-benchmark-matrix/test_schedule_casc_resume.py
+```
+
+Three focused tests pass.  They cover default nonmutation, checkpoint/hash/path,
+argument and allowance rejection, and a real synthetic future task that is
+registered, audited, deliberately weakened, rejected, and removed in `finally`.
+Only the intended armed task remained afterward.  Its real audit passed against
+plan SHA-256 `43b0d90a...`, checkpoint SHA-256 `1f51d7cc...`, J13 count 965,
+trigger `2026-08-03T05:00:10Z`, exact current-user SID, and all scheduler
+settings.  The ignored machine-readable audit is retained at
+`.artifacts/casc-benchmark/j13-scheduler-audit-260803.json`, SHA-256
+`85e86505e1060b1383b2828f72e8decec155475d345e623fbecd3ac5e0bee473`.
+The tool schedules only future unavailable-now plans within 24 hours; it does
+not replace tasks or broaden the controller's provider authority.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
