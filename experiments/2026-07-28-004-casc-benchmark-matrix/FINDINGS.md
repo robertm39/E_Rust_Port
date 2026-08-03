@@ -678,7 +678,9 @@ available`.  `--verify-only` launched no solver or service.  The diagnostic
 Linode and firewall were immediately deleted.  High-memory accounting then
 showed 12,900 seconds remaining today and 27,300 seconds projected at the next
 boundary, still safely above the scheduled 14,700-second ceiling; the scheduled
-task remains `Ready` for `2026-08-03T05:00:10Z`.
+task remains `Ready` for `2026-08-03T05:00:10Z`.  Its final scheduler audit
+also requires network availability, wakes the machine, starts when available,
+ignores duplicate instances, and retains the eight-hour execution ceiling.
 
 ## Remaining acceptance boundary
 
