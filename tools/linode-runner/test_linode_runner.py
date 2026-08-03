@@ -9,7 +9,7 @@ import tarfile
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from io import StringIO
+from io import BytesIO, StringIO, TextIOWrapper
 from pathlib import Path
 from unittest import mock
 
@@ -599,6 +599,48 @@ class InterruptedBootstrapRecoveryTests(unittest.TestCase):
 
 
 class RemoteExecDiagnosticsTests(unittest.TestCase):
+    def test_exec_reconfigures_narrow_streams_to_preserve_remote_unicode(self):
+        result = subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=0,
+            stdout="remote systemd \N{BLACK CIRCLE}\n",
+            stderr="remote diagnostic \N{CHECK MARK}\n",
+        )
+        stdout_bytes = BytesIO()
+        stderr_bytes = BytesIO()
+        stdout = TextIOWrapper(
+            stdout_bytes,
+            encoding="cp1252",
+            errors="strict",
+            write_through=True,
+        )
+        stderr = TextIOWrapper(
+            stderr_bytes,
+            encoding="cp1252",
+            errors="strict",
+            write_through=True,
+        )
+        with (
+            mock.patch.object(runner, "LinodeApi"),
+            mock.patch.object(runner, "load_current", return_value={"run_id": "r"}),
+            mock.patch.object(runner, "ssh_command", return_value=result),
+            mock.patch("sys.stdout", stdout),
+            mock.patch("sys.stderr", stderr),
+        ):
+            exit_code = runner.main(["exec", "--", "systemctl", "status"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.encoding, "utf-8")
+        self.assertEqual(stderr.encoding, "utf-8")
+        self.assertEqual(
+            stdout_bytes.getvalue().decode("utf-8"),
+            f"remote systemd \N{BLACK CIRCLE}{os.linesep}",
+        )
+        self.assertEqual(
+            stderr_bytes.getvalue().decode("utf-8"),
+            f"remote diagnostic \N{CHECK MARK}{os.linesep}",
+        )
+
     def test_exec_decodes_base64_remote_command(self):
         remote_command = "python3 - <<'PY'\nprint(\"quoted value\")\nPY"
         encoded = runner.base64.b64encode(remote_command.encode()).decode()

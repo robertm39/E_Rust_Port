@@ -762,6 +762,38 @@ InvocationID `a38a1c59ffc94f0784a26b23f541a1b7`, zero restarts, and active/runni
 state; the canonical result inventory had advanced to 970.  The controller
 continues to own validation, checkpoint capture, and exact resource deletion.
 
+## Windows remote-output UTF-8 boundary
+
+Question: can the Windows runner client relay arbitrary valid UTF-8 diagnostics
+from Linux while its redirected standard streams use a narrower legacy code
+page?  A read-only live probe supplied the falsification: `systemctl status`
+included systemd's U+25CF black-circle marker, `ssh_command` decoded it
+correctly, and Python then raised `UnicodeEncodeError` while printing through a
+CP-1252 `sys.stdout`.  The remote command had already completed and did not
+change provider or service state.
+
+`linode_runner.py` now reconfigures reconfigurable standard streams to strict
+UTF-8 before argument parsing or diagnostics.  The focused regression wraps
+separate byte buffers in strict CP-1252 `TextIOWrapper` instances, returns
+U+25CF on remote stdout and U+2713 on remote stderr, and requires both underlying
+streams to contain valid UTF-8.  This also covers errors emitted after parsing;
+in-memory `StringIO` test doubles remain unchanged.  The exact real reproduction
+now succeeds and preserves the marker:
+
+```powershell
+.\linode-runner.ps1 exec -- `
+    "systemctl status casc-j13-v2-resume-260803-135624-bc09.service --no-pager -n 4"
+python tools/linode-runner/test_linode_runner.py -v
+```
+
+All 85 runner tests pass (five POSIX-only skips).  The live output reported the
+same MainPID `3995`, active/running state, and 972-result inventory; raw campaign
+progress remains in the controller log above.  The fix changes only local text
+encoding, not SSH decoding, remote commands, lifecycle behavior, or exit-code
+handling.  Its limit is deliberate: invalid remote byte sequences are still
+handled by the existing SSH subprocess decoding policy rather than guessed at
+this presentation boundary.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and

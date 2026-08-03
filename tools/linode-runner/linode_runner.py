@@ -2921,7 +2921,16 @@ def parser() -> argparse.ArgumentParser:
     return root
 
 
+def configure_standard_streams_utf8() -> None:
+    """Keep remote Unicode intact across narrow Windows output code pages."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="strict")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_standard_streams_utf8()
     arguments = parser().parse_args(argv)
     try:
         if arguments.command == "init":
