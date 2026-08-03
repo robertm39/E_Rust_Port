@@ -1005,11 +1005,25 @@ python experiments/2026-07-28-004-casc-benchmark-matrix/test_resume_j13_checkpoi
 git diff --check
 ```
 
-The 29 batch/report tests and 10 controller tests pass.  The cleanup tests
+The 29 batch/report tests and initial 10 controller tests pass.  The cleanup tests
 simulate a delayed empty `EBUSY`, permanently populated state, and persistent
 empty-but-busy state; the journal tests falsify wrong command, exit status,
 unit result, terminal ordering, and duplicate failure evidence.  Live recovery
-and independent archive validation remain required before the retained runner
+then passed every failed-service and partial-residue gate and downloaded outer
+archive `e99d03fe526742f4c9716e90dfcff8ad1cab1c28b50c41a78fc102e146645d2a`,
+but independent validation found exactly two unreferenced streams:
+`results/vampire/feq/0766-feq-8b69c10d0c20.stdout` and `.stderr`.  No matching
+result JSON exists; these are the interrupted Vampire pair named by the failed
+cgroup.  The validator failed closed and again retained the runner.
+
+Capture now scans only the target run's result tree after the zero-process
+gate.  It preserves every stream with a result JSON, removes an unreferenced
+base only when both its `.stdout` and `.stderr` regular files exist, and rejects
+symlinks or an ambiguous one-stream set.  This makes failed-terminal recovery
+match the batch resume path, which already removes result-less streams before
+rerunning a solver/problem pair.  A focused structural regression pins the
+process-check/cleanup/report ordering and both-stream requirement.  A fresh
+archive and independent validation remain required before the retained runner
 may be deleted or this incident Bead may close.
 
 ## Remaining acceptance boundary

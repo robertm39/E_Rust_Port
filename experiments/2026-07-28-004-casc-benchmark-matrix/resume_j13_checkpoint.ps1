@@ -1541,9 +1541,40 @@ PY
     else {
         ""
     }
-    $captureCommand = @"
+$captureCommand = @"
 set -Eeuo pipefail
 if pgrep -f '^/root/umlaut-4e87dac3( |$)' || pgrep -f '^/root/vampire-5.0.1( |$)' || pgrep -f '^/usr/bin/python3 /opt/e-rust-port/source/tools/casc_benchmark/batch.py( |$)'; then echo 'solver or batch process remains' >&2; exit 1; fi
+python3 - '$runRoot/results' <<'PY'
+import sys
+from pathlib import Path
+
+results_root = Path(sys.argv[1])
+if not results_root.is_dir() or results_root.is_symlink():
+    raise SystemExit(f"result root is not a plain directory: {results_root}")
+artifacts = {}
+for path in results_root.rglob("*"):
+    if path.is_symlink():
+        raise SystemExit(f"result tree contains a symlink: {path}")
+    if path.is_file() and path.suffix in {".stdout", ".stderr"}:
+        artifacts.setdefault(path.with_suffix(""), set()).add(path.suffix)
+removed = []
+for base, suffixes in sorted(artifacts.items(), key=lambda item: str(item[0])):
+    result = base.with_suffix(".json")
+    if result.exists():
+        continue
+    if suffixes != {".stdout", ".stderr"}:
+        raise SystemExit(
+            f"incomplete result has an ambiguous artifact set: {base} {suffixes!r}"
+        )
+    for suffix in sorted(suffixes):
+        artifact = base.with_suffix(suffix)
+        artifact.unlink()
+        removed.append(str(artifact))
+print(
+    f"incomplete_result_artifacts_removed={len(removed)} "
+    f"incomplete_result_bases={len(removed) // 2}"
+)
+PY
 cd /opt/e-rust-port/source
 python3 tools/casc_benchmark/report.py --manifest '$casc2025ManifestRelative' --run-root '$casc2025RunRoot' --allow-partial
 python3 tools/casc_benchmark/report.py --manifest '$j13ManifestRelative' --run-root '$j13RunRoot' --allow-partial
@@ -1573,7 +1604,13 @@ sha256sum -- * > SHA256SUMS
 cd /root
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf '$remoteArchive' '$checkpointPrefix-$runId'
 "@
-    Invoke-Runner @("exec", "--", $captureCommand) | Out-Null
+    $captureOutput = Invoke-Runner @("exec", "--", $captureCommand)
+    foreach ($line in $captureOutput) {
+        $text = [string]$line
+        if (-not [string]::IsNullOrEmpty($text)) {
+            Write-ResumeLog $text
+        }
+    }
 
     $remoteHashLine = Invoke-RunnerProbe -RemoteCommand (
         "sha256sum '$remoteArchive'"

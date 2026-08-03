@@ -137,6 +137,20 @@ class CascResumeControllerProbeTests(unittest.TestCase):
             self.source,
         )
 
+    def test_capture_removes_only_unreferenced_complete_stream_pairs(self) -> None:
+        capture_start = self.source.index('$captureCommand = @"')
+        capture_end = self.source.index('"@', capture_start)
+        capture = self.source[capture_start:capture_end]
+        self.assertIn('results_root.rglob("*")', capture)
+        self.assertIn('path.suffix in {".stdout", ".stderr"}', capture)
+        self.assertIn('result = base.with_suffix(".json")', capture)
+        self.assertIn('if result.exists():', capture)
+        self.assertIn('suffixes != {".stdout", ".stderr"}', capture)
+        self.assertIn("artifact.unlink()", capture)
+        self.assertIn("incomplete_result_artifacts_removed=", capture)
+        self.assertLess(capture.index("pgrep -f"), capture.index("artifact.unlink()"))
+        self.assertLess(capture.index("artifact.unlink()"), capture.index("report.py"))
+
     def run_terminal_verifier(
         self,
         records: list[dict[str, object]],

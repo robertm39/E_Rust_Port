@@ -26,7 +26,7 @@ class ResumeControllerSourceTests(unittest.TestCase):
 
         self.assertEqual(
             source.count('if (-not [string]::IsNullOrEmpty($text))'),
-            2,
+            3,
         )
 
     def test_frozen_contract_identity_is_explicit_in_both_batch_calls(self) -> None:
