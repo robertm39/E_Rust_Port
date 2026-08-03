@@ -27,6 +27,8 @@ param(
 
     [switch]$AdoptExistingService,
 
+    [switch]$AdoptCompletedService,
+
     [ValidateRange(1, 2147483647)]
     [int64]$ExpectedServiceMainPid,
 
@@ -49,6 +51,7 @@ $vampireSha256 = (
     "3fd88f402d2b74ddf6bf96d49a2bf3c9383710b19d1c9c2c5ecb740265a5c665"
 )
 $serviceRuntimeSeconds = $MaxSessionWallSeconds + 300
+$completedCaptureAllowanceSeconds = 1800
 $runnerProbeTimeoutSeconds = 90
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
@@ -157,7 +160,12 @@ $checkpointRootName = $checkpointName.Substring(0, $checkpointName.Length - 7)
 $CheckpointSha256 = $CheckpointSha256.ToLowerInvariant()
 
 $adoptingExistingService = $AdoptExistingService.IsPresent
-if ($adoptingExistingService) {
+$adoptingCompletedService = $AdoptCompletedService.IsPresent
+$adoptingAnyService = $adoptingExistingService -or $adoptingCompletedService
+if ($adoptingExistingService -and $adoptingCompletedService) {
+    throw "AdoptExistingService and AdoptCompletedService are mutually exclusive"
+}
+if ($adoptingAnyService) {
     if (
         -not $Execute -or
         -not $PSBoundParameters.ContainsKey("ExistingRunnerRunId") -or
@@ -166,7 +174,7 @@ if ($adoptingExistingService) {
         $PSBoundParameters.ContainsKey("NotBeforeUtc")
     ) {
         throw (
-            "AdoptExistingService requires Execute, ExistingRunnerRunId, " +
+            "Service adoption requires Execute, ExistingRunnerRunId, " +
             "ExpectedServiceMainPid, and ExpectedServiceInvocationId, " +
             "and forbids NotBeforeUtc"
         )
@@ -176,8 +184,129 @@ elseif (
     $PSBoundParameters.ContainsKey("ExpectedServiceMainPid") -or
     $PSBoundParameters.ContainsKey("ExpectedServiceInvocationId")
 ) {
-    throw "Expected service identity requires AdoptExistingService"
+    throw (
+        "Expected service identity requires AdoptExistingService or " +
+        "AdoptCompletedService"
+    )
 }
+
+$terminalJournalVerifier = @'
+import base64
+import json
+import re
+import sys
+
+
+unit, invocation, pid_text, command_base64, contract = sys.argv[1:]
+expected_pid = int(pid_text)
+expected_command = base64.b64decode(command_base64).decode("utf-8")
+records = []
+for line_number, line in enumerate(sys.stdin, 1):
+    if not line.strip():
+        continue
+    try:
+        records.append(json.loads(line))
+    except json.JSONDecodeError as error:
+        raise SystemExit(
+            f"invalid journal JSON at line {line_number}: {error}"
+        )
+
+service_records = [
+    record
+    for record in records
+    if record.get("_SYSTEMD_UNIT") == unit or record.get("UNIT") == unit
+]
+if not service_records:
+    raise SystemExit("journal contains no records for the expected unit")
+
+observed_invocations = {
+    value
+    for record in service_records
+    for value in (
+        record.get("_SYSTEMD_INVOCATION_ID"),
+        record.get("INVOCATION_ID"),
+    )
+    if value
+}
+if observed_invocations != {invocation}:
+    raise SystemExit(
+        "journal invocation set mismatch: "
+        f"{sorted(observed_invocations)!r}"
+    )
+
+commands = {
+    record.get("_CMDLINE")
+    for record in service_records
+    if record.get("_SYSTEMD_UNIT") == unit
+    and record.get("_SYSTEMD_INVOCATION_ID") == invocation
+    and str(record.get("_PID")) == str(expected_pid)
+    and record.get("_CMDLINE")
+}
+if commands != {expected_command}:
+    raise SystemExit("journal command does not match the guarded batch")
+
+success_message_id = "7ad2d189f7e94e70a38c781354912448"
+success_message = f"{unit}: Deactivated successfully."
+success_records = [
+    record
+    for record in service_records
+    if record.get("UNIT") == unit
+    and record.get("INVOCATION_ID") == invocation
+    and record.get("MESSAGE_ID") == success_message_id
+    and record.get("MESSAGE") == success_message
+]
+if len(success_records) != 1:
+    raise SystemExit(
+        "journal must contain exactly one successful terminal record"
+    )
+
+summary_pattern = re.compile(
+    rf"^OK: contract {re.escape(contract)}; new=(\d+), resumed=(\d+)$"
+)
+summary_records = []
+for record in service_records:
+    if (
+        record.get("_SYSTEMD_UNIT") != unit
+        or record.get("_SYSTEMD_INVOCATION_ID") != invocation
+        or str(record.get("_PID")) != str(expected_pid)
+    ):
+        continue
+    match = summary_pattern.fullmatch(str(record.get("MESSAGE", "")))
+    if match:
+        summary_records.append((record, int(match.group(1)), int(match.group(2))))
+if len(summary_records) != 1:
+    raise SystemExit(
+        "journal must contain exactly one guarded batch completion summary"
+    )
+
+success_sequence = int(success_records[0]["__SEQNUM"])
+summary_record, new_results, resumed_results = summary_records[0]
+if success_sequence <= int(summary_record["__SEQNUM"]):
+    raise SystemExit("terminal success precedes the batch completion summary")
+
+boot_ids = {
+    record.get("_BOOT_ID") for record in service_records if record.get("_BOOT_ID")
+}
+if len(boot_ids) != 1:
+    raise SystemExit("journal records span an ambiguous boot identity")
+
+print(
+    json.dumps(
+        {
+            "boot_id": next(iter(boot_ids)),
+            "invocation_id": invocation,
+            "main_pid": expected_pid,
+            "new_results": new_results,
+            "resumed_results": resumed_results,
+            "reported_results": new_results + resumed_results,
+            "success_sequence": success_sequence,
+            "unit": unit,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+)
+'@
 
 function Get-VerifiedSha256 {
     param(
@@ -503,13 +632,16 @@ function Get-RunnerStatus {
 function Get-RequiredHighMemoryAllowance {
     param(
         [ValidateRange(0, 1)]
-        [int]$ExpectedActiveManagedHighMemory = 0
+        [int]$ExpectedActiveManagedHighMemory = 0,
+
+        [ValidateRange(1, 86400)]
+        [int]$RequiredSeconds = $serviceRuntimeSeconds
     )
 
     $raw = Invoke-Runner @(
         "allowance",
         "--required-seconds",
-        [string]$serviceRuntimeSeconds
+        [string]$RequiredSeconds
     )
     try {
         $allowance = $raw | ConvertFrom-Json
@@ -520,8 +652,8 @@ function Get-RequiredHighMemoryAllowance {
     if (
         [int]$allowance.schema_version -ne 1 -or
         [string]$allowance.kind -ne "umlaut-linode-high-memory-allowance" -or
-        [int]$allowance.required_seconds -ne $serviceRuntimeSeconds -or
-        [int]$allowance.remaining_seconds -lt $serviceRuntimeSeconds -or
+        [int]$allowance.required_seconds -ne $RequiredSeconds -or
+        [int]$allowance.remaining_seconds -lt $RequiredSeconds -or
         [int]$allowance.active_managed_high_memory -ne
             $ExpectedActiveManagedHighMemory -or
         (
@@ -531,7 +663,7 @@ function Get-RequiredHighMemoryAllowance {
     ) {
         throw (
             "Trusted allowance does not permit the required " +
-            "$serviceRuntimeSeconds-second high-memory slice"
+            "$RequiredSeconds-second high-memory operation"
         )
     }
     return $allowance
@@ -553,13 +685,73 @@ function Get-ServiceProperties {
     param([Parameter(Mandatory = $true)][string]$Unit)
 
     $fields = (
-        "ActiveState,SubState,MainPID,InvocationID,NRestarts,Result," +
-        "ExecMainStatus"
+        "LoadState,ActiveState,SubState,MainPID,InvocationID,NRestarts," +
+        "Result,ExecMainStatus"
     )
     $raw = Invoke-RunnerProbe -RemoteCommand (
         "systemctl show $Unit --property=$fields"
     )
     return ConvertFrom-SystemdProperties -Text $raw
+}
+
+function Get-VerifiedCompletedServiceEvidence {
+    param(
+        [Parameter(Mandatory = $true)][string]$Unit,
+        [Parameter(Mandatory = $true)][hashtable]$Properties,
+        [Parameter(Mandatory = $true)][string]$ExpectedInvocation,
+        [Parameter(Mandatory = $true)][string]$ExpectedMainPid,
+        [Parameter(Mandatory = $true)][string]$ExpectedCommand
+    )
+
+    if (
+        [string]$Properties.ActiveState -ne "inactive" -or
+        [string]$Properties.SubState -ne "dead" -or
+        [string]$Properties.MainPID -ne "0" -or
+        [string]$Properties.NRestarts -ne "0" -or
+        [string]$Properties.Result -ne "success" -or
+        [string]$Properties.ExecMainStatus -ne "0" -or
+        (
+            [string]$Properties.InvocationID -ne "" -and
+            [string]$Properties.InvocationID -ne $ExpectedInvocation
+        ) -or
+        (
+            [string]$Properties.LoadState -ne "loaded" -and
+            [string]$Properties.LoadState -ne "not-found"
+        )
+    ) {
+        throw "Completed service properties do not match a clean terminal state"
+    }
+
+    $verifierBase64 = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($terminalJournalVerifier)
+    )
+    $commandBase64 = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($ExpectedCommand)
+    )
+    $launcher = "import base64;exec(base64.b64decode('$verifierBase64'))"
+    $remoteCommand = (
+        "journalctl -u '$Unit' -o json --no-pager | " +
+        "python3 -c `"$launcher`" '$Unit' '$ExpectedInvocation' " +
+        "'$ExpectedMainPid' '$commandBase64' '$expectedContract'"
+    )
+    $raw = Invoke-RunnerProbe -RemoteCommand $remoteCommand
+    try {
+        $evidence = $raw | ConvertFrom-Json
+    }
+    catch {
+        throw "Could not parse completed-service journal evidence"
+    }
+    if (
+        [string]$evidence.unit -ne $Unit -or
+        [string]$evidence.invocation_id -ne $ExpectedInvocation -or
+        [string]$evidence.main_pid -ne $ExpectedMainPid -or
+        [string]$evidence.boot_id -notmatch "^[0-9a-f]{32}$" -or
+        [int]$evidence.reported_results -le 0 -or
+        [int64]$evidence.success_sequence -le 0
+    ) {
+        throw "Completed-service journal evidence is inconsistent"
+    }
+    return $evidence
 }
 
 $runnerAcquired = $false
@@ -570,6 +762,8 @@ $remoteArchive = $null
 $unit = $null
 $expectedInvocation = $null
 $expectedMainPid = $null
+$terminalEvidence = $null
+$terminalReportedResults = $null
 
 try {
     Write-ResumeLog "controller_started"
@@ -580,7 +774,7 @@ try {
     $useExistingRunner = $PSBoundParameters.ContainsKey(
         "ExistingRunnerRunId"
     )
-    $expectedRunnerPhase = if ($adoptingExistingService) {
+    $expectedRunnerPhase = if ($adoptingAnyService) {
         "synced"
     }
     else {
@@ -602,12 +796,20 @@ try {
         ) {
             throw "Requested existing runner is not the exact ready host"
         }
+        $requiredExistingSeconds = if ($adoptingCompletedService) {
+            $completedCaptureAllowanceSeconds
+        }
+        else {
+            $serviceRuntimeSeconds
+        }
         $allowance = Get-RequiredHighMemoryAllowance `
-            -ExpectedActiveManagedHighMemory 1
+            -ExpectedActiveManagedHighMemory 1 `
+            -RequiredSeconds $requiredExistingSeconds
         Write-ResumeLog (
             "allowance_verified_existing observed_at=" +
             "$($allowance.observed_at_utc) remaining_seconds=" +
-            "$($allowance.remaining_seconds)"
+            "$($allowance.remaining_seconds) required_seconds=" +
+            "$requiredExistingSeconds"
         )
         $runnerAcquired = $true
         Write-ResumeLog "existing_runner_claimed run_id=$ExistingRunnerRunId"
@@ -710,29 +912,43 @@ try {
     Write-ResumeLog (
         "runner_ready run_id=$runId label=$runnerLabel linode_id=$linodeId"
     )
-    if ($adoptingExistingService) {
+    if ($adoptingAnyService) {
         $launchAttempted = $true
+        $expectedMainPid = [string]$ExpectedServiceMainPid
+        $expectedInvocation = $ExpectedServiceInvocationId
         $properties = Get-ServiceProperties -Unit $unit
-        if (
-            [string]$properties.ActiveState -ne "active" -or
-            [string]$properties.SubState -ne "running" -or
-            [string]$properties.MainPID -ne [string]$ExpectedServiceMainPid -or
-            [string]$properties.InvocationID -ne
-                $ExpectedServiceInvocationId -or
-            [string]$properties.NRestarts -ne "0" -or
-            [string]$properties.Result -ne "success" -or
-            [string]$properties.ExecMainStatus -ne "0"
-        ) {
-            throw "Existing service does not match the required live identity"
+        if ($adoptingCompletedService) {
+            $terminalEvidence = Get-VerifiedCompletedServiceEvidence `
+                -Unit $unit `
+                -Properties $properties `
+                -ExpectedInvocation $expectedInvocation `
+                -ExpectedMainPid $expectedMainPid `
+                -ExpectedCommand $batchCommand
+            $terminalReportedResults = [int]$terminalEvidence.reported_results
         }
-        $execStart = (
-            Invoke-RunnerProbe -RemoteCommand (
-                "systemctl show $unit --property=ExecStart --value"
-            )
-        ).Trim()
-        $expectedExecStart = "argv[]=$batchCommand ;"
-        if (-not $execStart.Contains($expectedExecStart)) {
-            throw "Existing service command does not match the guarded batch"
+        else {
+            if (
+                [string]$properties.LoadState -ne "loaded" -or
+                [string]$properties.ActiveState -ne "active" -or
+                [string]$properties.SubState -ne "running" -or
+                [string]$properties.MainPID -ne $expectedMainPid -or
+                [string]$properties.InvocationID -ne
+                    $expectedInvocation -or
+                [string]$properties.NRestarts -ne "0" -or
+                [string]$properties.Result -ne "success" -or
+                [string]$properties.ExecMainStatus -ne "0"
+            ) {
+                throw "Existing service does not match the required live identity"
+            }
+            $execStart = (
+                Invoke-RunnerProbe -RemoteCommand (
+                    "systemctl show $unit --property=ExecStart --value"
+                )
+            ).Trim()
+            $expectedExecStart = "argv[]=$batchCommand ;"
+            if (-not $execStart.Contains($expectedExecStart)) {
+                throw "Existing service command does not match the guarded batch"
+            }
         }
         $adoptionCommand = @"
 set -Eeuo pipefail
@@ -766,11 +982,25 @@ PY
         if ($adoptionOutput -notmatch "adoption_result_count=(\d+)") {
             throw "Existing service adoption did not return a result count"
         }
-        $expectedMainPid = [string]$ExpectedServiceMainPid
-        $expectedInvocation = $ExpectedServiceInvocationId
+        $adoptedResultCount = [int]$Matches[1]
+        if (
+            $adoptingCompletedService -and
+            $adoptedResultCount -ne $terminalReportedResults
+        ) {
+            throw (
+                "Completed-service journal count does not match the result " +
+                "inventory: $terminalReportedResults != $adoptedResultCount"
+            )
+        }
+        $adoptionKind = if ($adoptingCompletedService) {
+            "completed_service_adopted"
+        }
+        else {
+            "existing_service_adopted"
+        }
         Write-ResumeLog (
-            "existing_service_adopted unit=$unit main_pid=$expectedMainPid " +
-            "invocation_id=$expectedInvocation result_count=$($Matches[1])"
+            "$adoptionKind unit=$unit main_pid=$expectedMainPid " +
+            "invocation_id=$expectedInvocation result_count=$adoptedResultCount"
         )
     }
     else {
@@ -892,42 +1122,109 @@ PY
     $monitorDeadline = [DateTimeOffset]::UtcNow.AddSeconds(
         $serviceRuntimeSeconds + 300
     )
-    while ($true) {
-        $properties = Get-ServiceProperties -Unit $unit
-        if ([string]$properties.InvocationID -ne $expectedInvocation) {
-            throw "Transient service invocation changed"
-        }
-        if ([string]$properties.NRestarts -ne "0") {
-            throw "Transient service restarted"
-        }
-        if ([string]$properties.ActiveState -ne "active") {
+    if ($null -eq $terminalEvidence) {
+        while ($true) {
+            $properties = Get-ServiceProperties -Unit $unit
+            if ([string]$properties.ActiveState -eq "active") {
+                if (
+                    [string]$properties.LoadState -ne "loaded" -or
+                    [string]$properties.InvocationID -ne
+                        $expectedInvocation
+                ) {
+                    throw "Transient service invocation changed"
+                }
+                if ([string]$properties.NRestarts -ne "0") {
+                    throw "Transient service restarted"
+                }
+                if ([string]$properties.MainPID -ne $expectedMainPid) {
+                    throw "Transient service main PID changed while active"
+                }
+                $resultCount = Invoke-RunnerProbe -RemoteCommand (
+                    "find '$runRoot/results' -type f -name '*.json' | wc -l"
+                )
+                Write-ResumeLog (
+                    "service_active result_count=$($resultCount.Trim())"
+                )
+                if ([DateTimeOffset]::UtcNow -ge $monitorDeadline) {
+                    throw (
+                        "Transient service exceeded its guarded monitoring " +
+                        "deadline"
+                    )
+                }
+                Start-Sleep -Seconds $PollSeconds
+                continue
+            }
+
+            if ([string]$properties.InvocationID -eq $expectedInvocation) {
+                if ([string]$properties.NRestarts -ne "0") {
+                    throw "Transient service restarted"
+                }
+                if (
+                    [string]$properties.ActiveState -eq "inactive" -and
+                    [string]$properties.Result -eq "success" -and
+                    [string]$properties.ExecMainStatus -eq "0"
+                ) {
+                    $terminalEvidence = Get-VerifiedCompletedServiceEvidence `
+                        -Unit $unit `
+                        -Properties $properties `
+                        -ExpectedInvocation $expectedInvocation `
+                        -ExpectedMainPid $expectedMainPid `
+                        -ExpectedCommand $batchCommand
+                    $terminalReportedResults = [int](
+                        $terminalEvidence.reported_results
+                    )
+                }
+                break
+            }
+            if ([string]$properties.InvocationID -ne "") {
+                throw "Transient service invocation changed"
+            }
+            $terminalEvidence = Get-VerifiedCompletedServiceEvidence `
+                -Unit $unit `
+                -Properties $properties `
+                -ExpectedInvocation $expectedInvocation `
+                -ExpectedMainPid $expectedMainPid `
+                -ExpectedCommand $batchCommand
+            $terminalReportedResults = [int]$terminalEvidence.reported_results
             break
         }
-        if ([string]$properties.MainPID -ne $expectedMainPid) {
-            throw "Transient service main PID changed while active"
-        }
-        $resultCount = Invoke-RunnerProbe -RemoteCommand (
-            "find '$runRoot/results' -type f -name '*.json' | wc -l"
-        )
-        Write-ResumeLog "service_active result_count=$($resultCount.Trim())"
-        if ([DateTimeOffset]::UtcNow -ge $monitorDeadline) {
-            throw "Transient service exceeded its guarded monitoring deadline"
-        }
-        Start-Sleep -Seconds $PollSeconds
     }
 
     $serviceSucceeded = (
-        [string]$properties.ActiveState -eq "inactive" -and
-        [string]$properties.Result -eq "success" -and
-        [string]$properties.ExecMainStatus -eq "0" -and
-        [string]$properties.InvocationID -eq $expectedInvocation -and
-        [string]$properties.NRestarts -eq "0"
+        $null -ne $terminalEvidence -or
+        (
+            [string]$properties.ActiveState -eq "inactive" -and
+            [string]$properties.Result -eq "success" -and
+            [string]$properties.ExecMainStatus -eq "0" -and
+            [string]$properties.InvocationID -eq $expectedInvocation -and
+            [string]$properties.NRestarts -eq "0"
+        )
     )
+    if ($null -ne $terminalEvidence) {
+        Write-ResumeLog (
+            "terminal_service_identity_verified unit=$unit " +
+            "main_pid=$expectedMainPid invocation_id=$expectedInvocation " +
+            "boot_id=$($terminalEvidence.boot_id) " +
+            "reported_results=$terminalReportedResults"
+        )
+    }
     Write-ResumeLog (
         "service_finished active_state=$($properties.ActiveState) " +
         "result=$($properties.Result) exec_status=$($properties.ExecMainStatus)"
     )
 
+    $terminalBootId = if ($null -ne $terminalEvidence) {
+        [string]$terminalEvidence.boot_id
+    }
+    else {
+        ""
+    }
+    $terminalResultCount = if ($null -ne $terminalReportedResults) {
+        [string]$terminalReportedResults
+    }
+    else {
+        ""
+    }
     $captureCommand = @"
 set -Eeuo pipefail
 if pgrep -f '^/root/umlaut-4e87dac3( |$)' || pgrep -f '^/root/vampire-5.0.1( |$)' || pgrep -f '^/usr/bin/python3 /opt/e-rust-port/source/tools/casc_benchmark/batch.py( |$)'; then echo 'solver or batch process remains' >&2; exit 1; fi
@@ -943,6 +1240,7 @@ test ! -e '$remoteCheckpointRoot'
 install -d -m 0700 '$remoteCheckpointRoot'
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf '$remoteCheckpointRoot/casc-runs.tar.gz' -C /opt/e-rust-port casc-runs
 journalctl -u '$unit' --no-pager -o short-iso > '$remoteCheckpointRoot/service.log'
+journalctl -u '$unit' --no-pager -o json > '$remoteCheckpointRoot/service-journal.jsonl'
 systemctl show '$unit' --all > '$remoteCheckpointRoot/service-properties.txt'
 cp /opt/e-rust-port/package-maintenance-quiescence.json '$remoteCheckpointRoot/package-maintenance-quiescence.json'
 ps -eo pid,ppid,etimes,stat,comm,args > '$remoteCheckpointRoot/processes.txt'
@@ -953,7 +1251,7 @@ systemctl list-units --all --plain --no-legend 'umlaut-casc-*' > '$remoteCheckpo
 test ! -s '$remoteCheckpointRoot/cgroup-residue.txt'
 test ! -s '$remoteCheckpointRoot/solver-units.txt'
 sha256sum '$remoteCorpus' '$remoteCheckpointInput' '$remoteUmlaut' '$remoteVampire' > '$remoteCheckpointRoot/input-sha256s.txt'
-printf '%s\n' 'controller_id=$controllerId' 'release=$Release' 'parent_checkpoint=$checkpointName' 'parent_checkpoint_sha256=$CheckpointSha256' 'initial_results=$ExpectedInitialResults' 'expected_total_results=$expectedTotalResults' 'max_session_wall_seconds=$MaxSessionWallSeconds' 'runner_id=$runId' 'runner_label=$runnerLabel' 'linode_id=$linodeId' 'unit=$unit' 'initial_main_pid=$expectedMainPid' 'initial_invocation_id=$expectedInvocation' > '$remoteCheckpointRoot/resume-metadata.txt'
+printf '%s\n' 'controller_id=$controllerId' 'release=$Release' 'parent_checkpoint=$checkpointName' 'parent_checkpoint_sha256=$CheckpointSha256' 'initial_results=$ExpectedInitialResults' 'expected_total_results=$expectedTotalResults' 'max_session_wall_seconds=$MaxSessionWallSeconds' 'runner_id=$runId' 'runner_label=$runnerLabel' 'linode_id=$linodeId' 'unit=$unit' 'initial_main_pid=$expectedMainPid' 'initial_invocation_id=$expectedInvocation' 'terminal_boot_id=$terminalBootId' 'terminal_reported_results=$terminalResultCount' > '$remoteCheckpointRoot/resume-metadata.txt'
 cd '$remoteCheckpointRoot'
 sha256sum -- * > SHA256SUMS
 cd /root
@@ -990,6 +1288,15 @@ tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf '$remoteArch
         throw (
             "Final result count is outside the guarded range: " +
             "$finalCount after $ExpectedInitialResults"
+        )
+    }
+    if (
+        $null -ne $terminalReportedResults -and
+        $finalCount -ne $terminalReportedResults
+    ) {
+        throw (
+            "Final result count does not match the terminal journal " +
+            "summary: $finalCount != $terminalReportedResults"
         )
     }
 

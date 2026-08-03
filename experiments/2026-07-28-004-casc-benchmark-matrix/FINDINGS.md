@@ -880,6 +880,47 @@ owns the unchanged remote PID/invocation with zero restarts and one active
 solver cgroup.  The current slice still requires its final verified checkpoint
 capture and resource deletion before this recovery is accepted.
 
+## Unloaded transient-service completion identity
+
+Question: can checkpoint capture still prove the exact completed service after
+systemd garbage-collects a successful transient unit?  The recovered J13 slice
+supplied the concrete case.  It completed naturally at 1,457 results
+(`new=492, resumed=965`) with exit status zero and no restart.  The next bounded
+poll returned `LoadState=not-found`, inactive/dead, MainPID zero, and an empty
+`InvocationID`; the first recovery controller therefore failed closed with
+`Transient service invocation changed` and retained runner
+`260803-135624-bc09`.  No batch or solver process remained, and neither remote
+successor-checkpoint path existed.
+
+The journal retains the authoritative terminal chain even after the unit object
+is unloaded.  Process records name unit
+`casc-j13-v2-resume-260803-135624-bc09.service`, PID `3995`, invocation
+`a38a1c59ffc94f0784a26b23f541a1b7`, boot
+`c1a84dc2dd8c45828c83c87295d9d35f`, and the complete expected batch command.
+A later manager record has systemd's successful-unit `MESSAGE_ID`, the same
+unit and `INVOCATION_ID`, and the exact `Deactivated successfully` message.
+
+Completed-service recovery is now explicit through
+`-AdoptCompletedService`; it is mutually exclusive with live-service adoption
+and retains the same exact runner, PID, invocation, input hashes, frozen
+contract, result-range, and collision requirements.  It additionally requires
+one boot identity, one invocation identity, the exact PID/command, exactly one
+contract-bound batch completion summary, and exactly one later successful
+terminal manager record.  The journal-reported total must equal both the live
+result inventory and the final downloaded count.  Capture preserves the raw
+JSON journal and terminal boot/count metadata.  Completed recovery reserves a
+bounded 1,800-second allowance instead of pretending that an already finished
+service needs another complete 14,700-second runtime.
+
+The embedded verifier was run directly against the retained live journal and
+returned 1,457 results with the identities above.  Independent probes proved
+zero matching batch/solver processes, both remote checkpoint paths absent, and
+11,691 seconds of remaining guarded high-memory allowance.  Eight focused
+tests cover the normal terminal record plus mixed invocation, wrong command,
+missing/duplicate success, terminal-before-summary, and mixed-boot
+falsifications.  The runner is intentionally retained until the patched
+controller captures and fully validates the checkpoint.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
