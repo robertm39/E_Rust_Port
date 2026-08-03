@@ -1023,8 +1023,38 @@ symlinks or an ambiguous one-stream set.  This makes failed-terminal recovery
 match the batch resume path, which already removes result-less streams before
 rerunning a solver/problem pair.  A focused structural regression pins the
 process-check/cleanup/report ordering and both-stream requirement.  A fresh
-archive and independent validation remain required before the retained runner
-may be deleted or this incident Bead may close.
+retry removed exactly two streams from one base and captured
+`.artifacts/casc-benchmark/j13-checkpoint-260803-182617-21a7.tar.gz`,
+18,569,376 bytes with SHA-256
+`80c052b18e740c242311de7ca31ad5aa8c770460ee3164f4c6187c6b81332870`.
+The streaming validator proves 1,531/2,700 J13 records (766 Umlaut, 765
+Vampire), 1,531/8,502 combined records, all 66 contextual CSVs, and failed
+service lifecycle `exit-code`/status 2 with zero restarts.  Controller and
+independent validator sidecars are byte-identical at SHA-256
+`107cc6c6f100784898319cb927371070ebd82a4bc30b14a9e0b645b76793157f`.
+
+An independent raw audit verified the archive hash and all 12 outer hashes,
+13 outer and 4,675 inner regular members, inner SHA-256
+`998d972dd736ba2f372f79b3a6eb02471ebf447c4f81fa8eda56f7adcfe7978c`,
+1,531 unique sorted result paths, all 3,062 referenced streams with zero
+orphans, 80 single-boot/single-invocation journal records, exact process-exit
+sequence 13,075 followed by unit-failure sequence 13,076, masked package
+maintenance, and empty cgroup/solver-unit inventories.  The rejected archive
+was preserved with suffix `.invalid-orphan-artifacts.tar.gz` for diagnosis.
+Only after `checkpoint_verified`, the controller deleted exact Linode
+`102210235` and firewall `103722650`; managed-runner status is active null with
+no parked hosts.
+
+The successor planner selected J13 1,531/2,700.  At
+`2026-08-03T21:23:40Z`, 955 of the required 14,700 seconds remained, so plan
+`.artifacts/casc-benchmark/j13-1531-next-resume-plan-260804.json`, SHA-256
+`f9eac6289137b88f907d4ea7df9efe43a8454a85247c46225733b8bde96ad7aa`,
+targets the guarded `2026-08-04T05:00:10Z` boundary.  The stale 1,457-result
+task was audited and replaced by the same one-shot name,
+`Umlaut-CASC-J13-Resume-20260804T050010Z`; a post-registration audit proves the
+new archive/hash/count, self-disable-before-controller action, five-minute
+one-day retries, limited current-user principal, wake/network/start-available
+settings, `IgnoreNew`, and eight-hour ceiling.
 
 ## Remaining acceptance boundary
 
