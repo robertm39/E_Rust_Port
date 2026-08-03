@@ -580,6 +580,12 @@ try {
     $useExistingRunner = $PSBoundParameters.ContainsKey(
         "ExistingRunnerRunId"
     )
+    $expectedRunnerPhase = if ($adoptingExistingService) {
+        "synced"
+    }
+    else {
+        "ready"
+    }
     if ($useExistingRunner) {
         $status = $initialStatus
         $candidate = $status.active
@@ -590,7 +596,7 @@ try {
                 "e-rust-codex-$ExistingRunnerRunId" -or
             [string]$candidate.lifecycle -ne "active" -or
             [string]$candidate.type -ne "g7-highmem-8" -or
-            [string]$candidate.phase -ne "ready" -or
+            [string]$candidate.phase -ne $expectedRunnerPhase -or
             [string]$candidate.live_linode_status -ne "running" -or
             [string]$candidate.live_firewall_status -ne "enabled"
         ) {
@@ -636,7 +642,7 @@ try {
     }
     if (
         [string]$active.type -ne "g7-highmem-8" -or
-        [string]$active.phase -ne "ready" -or
+        [string]$active.phase -ne $expectedRunnerPhase -or
         [string]$active.live_linode_status -ne "running" -or
         $linodeId -le 0
     ) {

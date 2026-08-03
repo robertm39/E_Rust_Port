@@ -61,6 +61,9 @@ class CascResumeControllerProbeTests(unittest.TestCase):
             self.source,
         )
         self.assertIn('forbids NotBeforeUtc"', self.source)
+        self.assertIn('$expectedRunnerPhase = if ($adoptingExistingService)', self.source)
+        self.assertIn('"synced"', self.source)
+        self.assertIn('[string]$candidate.phase -ne $expectedRunnerPhase', self.source)
 
     def test_adoption_fails_closed_before_skipping_restore_and_launch(self) -> None:
         runner_ready = self.source.index("runner_ready run_id=")
