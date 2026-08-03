@@ -840,12 +840,45 @@ test detected and killed only that exact synthetic PID, and a second bounded
 probe proved zero residue.  Consequently this facility is deliberately for
 short, read-only probes, not remote workload supervision.
 
-The already running controller loaded the preceding script and remains blocked
-in its original child; changing repository files cannot repair its in-memory
-call.  It is left untouched so it cannot be forced into premature recovery
-retention while the healthy service runs.  The current slice still requires a
-verified recovery capture, and the timeout fix must be in place before any
-successor controller is launched.
+The already running controller loaded the preceding script, so changing files
+could not repair its in-memory call.  A fail-closed adoption mode now provides
+the missing ownership transfer.  It is available only with `-Execute`, the
+exact existing runner ID, expected main PID, and 32-hex invocation ID; it
+forbids a not-before boundary.  Normal reuse still requires runner phase
+`ready`, while adoption requires the exact post-sync `synced` phase.  Before
+skipping restore and launch, adoption verifies active/running state, zero
+restarts, success status, the complete expected `ExecStart` command, all four
+uploaded input hashes, the frozen contract-file hash, absence of both successor
+checkpoint paths, and a live result count strictly after the parent checkpoint
+and at or below the release total.  Any mismatch occurs on the existing
+recovery-retention path and cannot delete resources.
+
+The first scheduled adoption attempt supplied the exact identity but failed
+safely before acquisition because it expected the ordinary `ready` phase; live
+state proved the controller intentionally leaves the runner `synced` after
+upload.  The corrected phase distinction passed six focused adoption/probe
+tests and the complete 95-test runner/controller suite (five expected POSIX
+skips), both PowerShell parsers, Python compilation, and whitespace checks.
+Commits `fd1d8d74` and `cc84cc75` preserve the adoption implementation and
+exact synced-state correction.
+
+Dedicated one-shot task
+`Umlaut-CASC-J13-Recovery-20260803T161500Z` was audited before start with the
+repository controller/checkpoint, runner `260803-135624-bc09`, MainPID `3995`,
+InvocationID `a38a1c59ffc94f0784a26b23f541a1b7`, current-user limited principal,
+network/wake/start-available settings, `IgnoreNew`, and an eight-hour ceiling.
+It was started once and immediately disabled while running.  Recovery log
+`.artifacts/casc-benchmark/j13-resume-controller-20260803T161623Z-13256.log`
+then verified the exact `ExecStart`, all uploaded hashes, contract hash, and
+1,351-result inventory before recording `existing_service_adopted`.  Its next
+bounded poll completed normally at `2026-08-03T16:17:30Z`.
+
+Only after that proof, the original task was stopped and disabled.  Old PID
+`4796` and its stuck child tree are absent; the old task has no next run and
+records `0x41306` (terminated).  Recovery PID `13256` remains responsive and
+owns the unchanged remote PID/invocation with zero restarts and one active
+solver cgroup.  The current slice still requires its final verified checkpoint
+capture and resource deletion before this recovery is accepted.
 
 ## Remaining acceptance boundary
 
