@@ -185,6 +185,24 @@ if (-not (Test-Path -LiteralPath $secretPath -PathType Leaf)) {
     throw "Encrypted Linode token is missing: $secretPath"
 }
 
+$pythonRunnerArguments = $RunnerArguments
+if ($Command -eq "exec") {
+    $remoteArguments = @($RunnerArguments)
+    if ($remoteArguments.Count -gt 0 -and $remoteArguments[0] -eq "--") {
+        $remoteArguments = @($remoteArguments | Select-Object -Skip 1)
+    }
+    if ($remoteArguments.Count -eq 0) {
+        throw "Provide a remote command after 'exec --'"
+    }
+    $remoteCommand = $remoteArguments -join " "
+    $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($remoteCommand)
+    )
+    # Windows PowerShell's native argument marshalling removes embedded quote
+    # characters.  Encode the complete command before crossing that boundary.
+    $pythonRunnerArguments = @("--", "--encoded-command", $encodedCommand)
+}
+
 $tokenPointer = [IntPtr]::Zero
 $reaperTokenPointer = [IntPtr]::Zero
 $runnerExitCode = 1
@@ -209,7 +227,7 @@ try {
         # Preserve native stderr without letting Windows PowerShell terminate
         # this wrapper before the controller can report its real exit code.
         $ErrorActionPreference = "Continue"
-        & $python @pythonPrefix $controller $Command @RunnerArguments
+        & $python @pythonPrefix $controller $Command @pythonRunnerArguments
         $runnerExitCode = $LASTEXITCODE
     }
     finally {

@@ -317,6 +317,11 @@ For work that requires several remote Rust/C commands, keep one runner only as
 long as needed. This is the only supported way to issue Cargo or compiled-code
 commands interactively. Always put teardown in a PowerShell `finally` block:
 
+The wrapper base64-encodes the complete `exec` command before invoking Python.
+This preserves embedded quotes and multiline here-docs across Windows
+PowerShell's native argument boundary. The Python controller strictly validates
+and decodes that internal transport before SSH execution.
+
 ```powershell
 .\linode-runner.ps1 up
 try {

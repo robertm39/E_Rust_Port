@@ -42,7 +42,11 @@ class ResumeControllerSourceTests(unittest.TestCase):
         source = CONTROLLER.read_text(encoding="utf-8")
 
         self.assertIn("checkpoint_restore_verified", source)
-        self.assertIn('$verifyCommand = "python3 tools/casc_benchmark/batch.py "', source)
+        self.assertIn(
+            '$verifyCommand = "cd /opt/e-rust-port/source && "',
+            source,
+        )
+        self.assertIn('"python3 tools/casc_benchmark/batch.py "', source)
         preflight = source.split('$preflightCommand = @"', 1)[1].split('"@', 1)[0]
         self.assertNotIn("grep -Fq", preflight)
         self.assertIn("summary contract mismatch", preflight)

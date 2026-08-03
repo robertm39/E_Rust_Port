@@ -261,6 +261,58 @@ class ExplicitTransferTests(unittest.TestCase):
         self.assertIn("controller stdout", result.stdout)
         self.assertIn("Created symlink test", result.stderr)
 
+    @unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
+    def test_powershell_wrapper_preserves_multiline_exec_quotes(self):
+        wrapper = MODULE_PATH.parents[2] / "linode-runner.ps1"
+        remote_command = "python3 - <<'PY'\nprint(\"quoted value\")\nPY"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            copied_wrapper = root / "linode-runner.ps1"
+            copied_wrapper.write_bytes(wrapper.read_bytes())
+            controller = root / "tools" / "linode-runner" / "linode_runner.py"
+            controller.parent.mkdir(parents=True)
+            controller.write_text(
+                "import base64\n"
+                "import sys\n"
+                "assert sys.argv[1:3] == ['exec', '--']\n"
+                "assert sys.argv[3] == '--encoded-command'\n"
+                "print(base64.b64decode(sys.argv[4]).decode('utf-8'))\n",
+                encoding="utf-8",
+            )
+            local_app_data = root / "local-app-data"
+            secret = local_app_data / "E-Rust-Port" / "linode-token.dpapi"
+            secret.parent.mkdir(parents=True)
+            setup = (
+                "$secure=ConvertTo-SecureString 'test-token' "
+                "-AsPlainText -Force; $secure | ConvertFrom-SecureString | "
+                f"Set-Content -LiteralPath '{secret}'; "
+                "$remote = @'\n"
+                f"{remote_command}\n"
+                "'@\n"
+                f"& '{copied_wrapper}' exec -- $remote\n"
+                "exit $LASTEXITCODE"
+            )
+            environment = os.environ.copy()
+            environment["LOCALAPPDATA"] = str(local_app_data)
+            result = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    setup,
+                ],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=environment,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.strip().endswith(remote_command))
+
 
 class InterruptedBootstrapRecoveryTests(unittest.TestCase):
     def state(self) -> dict:
@@ -547,6 +599,46 @@ class InterruptedBootstrapRecoveryTests(unittest.TestCase):
 
 
 class RemoteExecDiagnosticsTests(unittest.TestCase):
+    def test_exec_decodes_base64_remote_command(self):
+        remote_command = "python3 - <<'PY'\nprint(\"quoted value\")\nPY"
+        encoded = runner.base64.b64encode(remote_command.encode()).decode()
+        result = subprocess.CompletedProcess(
+            args=["ssh"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        with (
+            mock.patch.object(runner, "LinodeApi"),
+            mock.patch.object(runner, "load_current", return_value={"run_id": "r"}),
+            mock.patch.object(runner, "ssh_command", return_value=result) as ssh,
+        ):
+            exit_code = runner.main(
+                ["exec", "--", "--encoded-command", encoded]
+            )
+
+        self.assertEqual(exit_code, 0)
+        ssh.assert_called_once_with(
+            {"run_id": "r"},
+            remote_command,
+            capture=True,
+        )
+
+    def test_exec_rejects_invalid_encoded_command(self):
+        with (
+            mock.patch.object(runner, "LinodeApi"),
+            mock.patch.object(runner, "load_current", return_value={"run_id": "r"}),
+            mock.patch.object(runner, "ssh_command") as ssh,
+            mock.patch("sys.stderr", new_callable=StringIO) as stderr,
+        ):
+            exit_code = runner.main(
+                ["exec", "--", "--encoded-command", "not base64!"]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("not valid base64 UTF-8", stderr.getvalue())
+        ssh.assert_not_called()
+
     def test_exec_failure_includes_both_remote_streams(self):
         failure = runner.RunnerError(
             "Command failed with exit code 1: ssh\n"

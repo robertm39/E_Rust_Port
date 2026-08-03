@@ -638,6 +638,31 @@ clean-main controller invocation with a 14,400-second batch cap and
 disabled.  Task history is still `never run`, the transient process is absent,
 and runner state remains empty.
 
+Before that boundary, a disposable normal Ubuntu runner reproduced the frozen
+preflight without consuming high-memory allowance.  Runner
+`260802-234516-ad21` (Linode `102151807`, firewall `102298773`) used source
+snapshot `0af1f5d7...`; all four immutable uploads, 1,350-problem/2,438-axiom
+extraction, inner checkpoint hashes, contract-file hash, report reconstruction,
+and 965-result inventory passed.  The new inline Python assertion then failed
+because Windows PowerShell's native argument marshalling removed its embedded
+double quotes before Python received the multiline SSH command.  This was an
+exact reproduction of the previously hidden transport class, not a corpus or
+contract mismatch.
+
+The PowerShell runner now base64-encodes the complete `exec` command before the
+native Python boundary; the Python controller strictly validates and decodes
+that internal transport.  The real runner then executed the unchanged
+double-quoted Python here-doc successfully and printed the exact 965-result
+acceptance message.  Separating batch verification also required an explicit
+`cd /opt/e-rust-port/source` because each SSH command starts a new shell.  With
+both fixes, the normal host reached and failed only the intended hardware gate:
+4 CPUs and 7,940 MiB cannot satisfy the canonical 8-CPU/131,072-MiB contract.
+No solver launched.  The disposable Linode and firewall were deleted, leaving
+empty runner state.  Eighty-four runner tests (five platform skips), 20
+controller/planner tests, 26 batch/report tests, and 11 checkpoint-validator
+tests pass with both PowerShell parsers, Python compilation, and whitespace
+validation.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and

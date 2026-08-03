@@ -678,7 +678,8 @@ PY
         "checkpoint_restore_verified initial_results=$ExpectedInitialResults"
     )
 
-    $verifyCommand = "python3 tools/casc_benchmark/batch.py " +
+    $verifyCommand = "cd /opt/e-rust-port/source && " +
+        "python3 tools/casc_benchmark/batch.py " +
         "--manifest '$remoteManifestRelative' " +
         "--problem-root /opt/e-rust-port/source " +
         "--output-root '$runRoot' " +

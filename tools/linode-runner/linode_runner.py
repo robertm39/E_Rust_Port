@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import hashlib
 import ipaddress
@@ -2977,9 +2978,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 remote_arguments.pop(0)
             if not remote_arguments:
                 raise RunnerError("Provide a remote command after 'exec --'")
+            if remote_arguments[0] == "--encoded-command":
+                if len(remote_arguments) != 2:
+                    raise RunnerError(
+                        "--encoded-command requires exactly one base64 value"
+                    )
+                try:
+                    remote_command = base64.b64decode(
+                        remote_arguments[1],
+                        validate=True,
+                    ).decode("utf-8")
+                except (ValueError, UnicodeDecodeError) as error:
+                    raise RunnerError(
+                        "Encoded remote command is not valid base64 UTF-8"
+                    ) from error
+                if not remote_command:
+                    raise RunnerError("Encoded remote command is empty")
+            else:
+                remote_command = " ".join(remote_arguments)
             result = ssh_command(
                 state,
-                " ".join(remote_arguments),
+                remote_command,
                 capture=True,
             )
             if result.stdout:
