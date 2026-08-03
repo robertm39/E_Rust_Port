@@ -25,6 +25,14 @@ param(
     [ValidatePattern("^[0-9]{6}-[0-9]{6}-[0-9a-f]{4}$")]
     [string]$ExistingRunnerRunId,
 
+    [switch]$AdoptExistingService,
+
+    [ValidateRange(1, 2147483647)]
+    [int64]$ExpectedServiceMainPid,
+
+    [ValidatePattern("^[0-9a-f]{32}$")]
+    [string]$ExpectedServiceInvocationId,
+
     [switch]$Execute
 )
 
@@ -147,6 +155,29 @@ if (
 }
 $checkpointRootName = $checkpointName.Substring(0, $checkpointName.Length - 7)
 $CheckpointSha256 = $CheckpointSha256.ToLowerInvariant()
+
+$adoptingExistingService = $AdoptExistingService.IsPresent
+if ($adoptingExistingService) {
+    if (
+        -not $Execute -or
+        -not $PSBoundParameters.ContainsKey("ExistingRunnerRunId") -or
+        -not $PSBoundParameters.ContainsKey("ExpectedServiceMainPid") -or
+        -not $PSBoundParameters.ContainsKey("ExpectedServiceInvocationId") -or
+        $PSBoundParameters.ContainsKey("NotBeforeUtc")
+    ) {
+        throw (
+            "AdoptExistingService requires Execute, ExistingRunnerRunId, " +
+            "ExpectedServiceMainPid, and ExpectedServiceInvocationId, " +
+            "and forbids NotBeforeUtc"
+        )
+    }
+}
+elseif (
+    $PSBoundParameters.ContainsKey("ExpectedServiceMainPid") -or
+    $PSBoundParameters.ContainsKey("ExpectedServiceInvocationId")
+) {
+    throw "Expected service identity requires AdoptExistingService"
+}
 
 function Get-VerifiedSha256 {
     param(
@@ -630,9 +661,113 @@ try {
         throw "Refusing to overwrite checkpoint output: $localArchive"
     }
 
+    $batchCommand = @(
+        "/usr/bin/python3",
+        "/opt/e-rust-port/source/tools/casc_benchmark/batch.py",
+        "--manifest",
+        $remoteManifest,
+        "--problem-root",
+        "/opt/e-rust-port/source",
+        "--output-root",
+        $runRoot,
+        "--umlaut-binary",
+        $remoteUmlaut,
+        "--vampire-binary",
+        $remoteVampire,
+        "--solvers",
+        "both",
+        "--cores",
+        "8",
+        "--memory-limit-mib",
+        "131072",
+        "--pids-limit",
+        "512",
+        "--vampire-seed",
+        "1",
+        "--wall-grace-seconds",
+        "0.25",
+        "--terminate-grace-seconds",
+        "1",
+        "--max-session-wall-seconds",
+        [string]$MaxSessionWallSeconds,
+        "--session-id",
+        $sessionId,
+        "--source-snapshot-sha256",
+        $sourceSnapshot,
+        "--expected-contract-id",
+        $expectedContract,
+        "--runner-label=$runnerLabel",
+        "--runner-run-id=$runId",
+        "--linode-id=$linodeId"
+    ) -join " "
+
     Write-ResumeLog (
         "runner_ready run_id=$runId label=$runnerLabel linode_id=$linodeId"
     )
+    if ($adoptingExistingService) {
+        $launchAttempted = $true
+        $properties = Get-ServiceProperties -Unit $unit
+        if (
+            [string]$properties.ActiveState -ne "active" -or
+            [string]$properties.SubState -ne "running" -or
+            [string]$properties.MainPID -ne [string]$ExpectedServiceMainPid -or
+            [string]$properties.InvocationID -ne
+                $ExpectedServiceInvocationId -or
+            [string]$properties.NRestarts -ne "0" -or
+            [string]$properties.Result -ne "success" -or
+            [string]$properties.ExecMainStatus -ne "0"
+        ) {
+            throw "Existing service does not match the required live identity"
+        }
+        $execStart = (
+            Invoke-RunnerProbe -RemoteCommand (
+                "systemctl show $unit --property=ExecStart --value"
+            )
+        ).Trim()
+        $expectedExecStart = "argv[]=$batchCommand ;"
+        if (-not $execStart.Contains($expectedExecStart)) {
+            throw "Existing service command does not match the guarded batch"
+        }
+        $adoptionCommand = @"
+set -Eeuo pipefail
+printf '%s  %s\n' '$corpusSha256' '$remoteCorpus' '$CheckpointSha256' '$remoteCheckpointInput' '$umlautSha256' '$remoteUmlaut' '$vampireSha256' '$remoteVampire' | sha256sum -c -
+printf '%s  %s\n' '$expectedContractFile' '$runRoot/contract.json' | sha256sum -c -
+test ! -e '$remoteCheckpointRoot'
+test ! -e '$remoteArchive'
+python3 - '$runRoot' '$expectedContract' '$ExpectedInitialResults' '$expectedTotalResults' <<'PY'
+import json
+import sys
+from pathlib import Path
+
+run_root = Path(sys.argv[1])
+expected_contract = sys.argv[2]
+initial_results = int(sys.argv[3])
+expected_total = int(sys.argv[4])
+contract = json.loads((run_root / "contract.json").read_text(encoding="utf-8"))
+if contract.get("contract_id") != expected_contract:
+    raise SystemExit(
+        f"contract mismatch: {contract.get('contract_id')!r}"
+    )
+result_count = sum(1 for _path in (run_root / "results").rglob("*.json"))
+if result_count <= initial_results or result_count > expected_total:
+    raise SystemExit(
+        f"result count outside recovery range: {result_count}"
+    )
+print(f"adoption_result_count={result_count}")
+PY
+"@
+        $adoptionOutput = Invoke-RunnerProbe -RemoteCommand $adoptionCommand
+        if ($adoptionOutput -notmatch "adoption_result_count=(\d+)") {
+            throw "Existing service adoption did not return a result count"
+        }
+        $expectedMainPid = [string]$ExpectedServiceMainPid
+        $expectedInvocation = $ExpectedServiceInvocationId
+        Write-ResumeLog (
+            "existing_service_adopted unit=$unit main_pid=$expectedMainPid " +
+            "invocation_id=$expectedInvocation result_count=$($Matches[1])"
+        )
+    }
+    else {
     Invoke-Runner @("sync") | Out-Null
     Invoke-Runner @("upload", $corpusPath, $remoteCorpus) | Out-Null
     Invoke-Runner @("upload", $checkpointPath, $remoteCheckpointInput) |
@@ -707,45 +842,6 @@ PY
     Invoke-Runner @("exec", "--", $verifyCommand) | Out-Null
     Write-ResumeLog "preflight_passed initial_results=$ExpectedInitialResults"
 
-    $batchCommand = @(
-        "/usr/bin/python3",
-        "/opt/e-rust-port/source/tools/casc_benchmark/batch.py",
-        "--manifest",
-        $remoteManifest,
-        "--problem-root",
-        "/opt/e-rust-port/source",
-        "--output-root",
-        $runRoot,
-        "--umlaut-binary",
-        $remoteUmlaut,
-        "--vampire-binary",
-        $remoteVampire,
-        "--solvers",
-        "both",
-        "--cores",
-        "8",
-        "--memory-limit-mib",
-        "131072",
-        "--pids-limit",
-        "512",
-        "--vampire-seed",
-        "1",
-        "--wall-grace-seconds",
-        "0.25",
-        "--terminate-grace-seconds",
-        "1",
-        "--max-session-wall-seconds",
-        [string]$MaxSessionWallSeconds,
-        "--session-id",
-        $sessionId,
-        "--source-snapshot-sha256",
-        $sourceSnapshot,
-        "--expected-contract-id",
-        $expectedContract,
-        "--runner-label=$runnerLabel",
-        "--runner-run-id=$runId",
-        "--linode-id=$linodeId"
-    ) -join " "
     $launchCommand = (
         "systemd-run --unit=$unit --service-type=exec " +
         "--property=Restart=no " +
@@ -785,6 +881,7 @@ PY
         "service_started unit=$unit main_pid=$expectedMainPid " +
         "invocation_id=$expectedInvocation"
     )
+    }
 
     $monitorDeadline = [DateTimeOffset]::UtcNow.AddSeconds(
         $serviceRuntimeSeconds + 300

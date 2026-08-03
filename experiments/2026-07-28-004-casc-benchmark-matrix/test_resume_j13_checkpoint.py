@@ -45,12 +45,46 @@ class CascResumeControllerProbeTests(unittest.TestCase):
     def test_all_short_service_and_inventory_probes_are_bounded(self) -> None:
         self.assertEqual(
             self.source.count("Invoke-RunnerProbe -RemoteCommand"),
-            4,
+            6,
         )
         self.assertIn(
             'Invoke-Runner @("exec", "--", $captureCommand)',
             self.source,
         )
+
+    def test_adoption_requires_complete_exact_identity(self) -> None:
+        self.assertIn("[switch]$AdoptExistingService", self.source)
+        self.assertIn("[int64]$ExpectedServiceMainPid", self.source)
+        self.assertIn("[string]$ExpectedServiceInvocationId", self.source)
+        self.assertIn(
+            '"AdoptExistingService requires Execute, ExistingRunnerRunId, "',
+            self.source,
+        )
+        self.assertIn('forbids NotBeforeUtc"', self.source)
+
+    def test_adoption_fails_closed_before_skipping_restore_and_launch(self) -> None:
+        runner_ready = self.source.index("runner_ready run_id=")
+        branch_start = self.source.index(
+            "if ($adoptingExistingService) {",
+            runner_ready,
+        )
+        branch_end = self.source.index("\n    else {", branch_start)
+        branch = self.source[branch_start:branch_end]
+
+        self.assertIn("$launchAttempted = $true", branch)
+        self.assertIn("$ExpectedServiceMainPid", branch)
+        self.assertIn("$ExpectedServiceInvocationId", branch)
+        self.assertIn("$expectedExecStart", branch)
+        self.assertIn("$batchCommand", branch)
+        self.assertIn("$corpusSha256", branch)
+        self.assertIn("$CheckpointSha256", branch)
+        self.assertIn("$umlautSha256", branch)
+        self.assertIn("$vampireSha256", branch)
+        self.assertIn("$expectedContractFile", branch)
+        self.assertIn("test ! -e '$remoteCheckpointRoot'", branch)
+        self.assertIn("result count outside recovery range", branch)
+        self.assertIn("existing_service_adopted", branch)
+        self.assertNotIn('Invoke-Runner @("sync")', branch)
         self.assertIn(
             'Invoke-Runner @("exec", "--", $launchCommand)',
             self.source,
