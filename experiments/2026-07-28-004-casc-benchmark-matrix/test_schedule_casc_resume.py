@@ -10,6 +10,7 @@ import os
 import random
 import subprocess
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -36,11 +37,18 @@ class CascResumeSchedulerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def plan(self, *, hours_ahead: int = 2) -> dict:
+    def plan(
+        self,
+        *,
+        hours_ahead: int = 2,
+        seconds_ahead: int | None = None,
+    ) -> dict:
         now = datetime.now(timezone.utc).replace(microsecond=0)
+        if seconds_ahead is None:
+            seconds_ahead = random.SystemRandom().randint(1, 50)
         not_before = now + timedelta(
             hours=hours_ahead,
-            seconds=random.SystemRandom().randint(1, 50),
+            seconds=seconds_ahead,
         )
         projected = not_before - timedelta(seconds=10)
         return {
@@ -133,6 +141,20 @@ class CascResumeSchedulerTests(unittest.TestCase):
             text=True,
         )
 
+    def task_observation(self, task_name: str) -> dict:
+        quoted_task_name = task_name.replace("'", "''")
+        command = (
+            f"$task=Get-ScheduledTask -TaskName '{quoted_task_name}'; "
+            f"$info=Get-ScheduledTaskInfo -TaskName '{quoted_task_name}'; "
+            "[ordered]@{enabled=[bool]$task.Settings.Enabled; "
+            "state=[string]$task.State; "
+            "last_run_time=$info.LastRunTime.ToUniversalTime().ToString('O'); "
+            "last_task_result=[int64]$info.LastTaskResult} | ConvertTo-Json"
+        )
+        result = self.powershell(command)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
     def test_default_is_nonmutating_validated_plan(self) -> None:
         result = self.invoke(self.write_plan(self.plan()))
         evidence = json.loads(result.stdout)
@@ -140,7 +162,15 @@ class CascResumeSchedulerTests(unittest.TestCase):
         self.assertEqual(evidence["status"], "ready_to_register")
         self.assertEqual(evidence["release"], "j13")
         self.assertEqual(evidence["checkpoint"]["completed_results"], 1)
-        self.assertIn('checkpoint with spaces.tar.gz"', evidence["task"]["arguments"])
+        self.assertIn("schedule_casc_resume.ps1", evidence["task"]["arguments"])
+        self.assertIn("-Launch", evidence["task"]["arguments"])
+        self.assertIn(
+            "checkpoint with spaces.tar.gz",
+            " ".join(evidence["task"]["controller"]["arguments"]),
+        )
+        self.assertEqual(evidence["task"]["retry_interval"], "PT5M")
+        self.assertEqual(evidence["task"]["retry_duration"], "P1D")
+        self.assertTrue(evidence["task"]["disables_before_controller"])
         self.assertTrue(evidence["task"]["wake_to_run"])
         self.assertEqual(evidence["task"]["multiple_instances"], "IgnoreNew")
 
@@ -190,6 +220,8 @@ class CascResumeSchedulerTests(unittest.TestCase):
             audited = json.loads(self.invoke(plan, "-Audit").stdout)
             self.assertEqual(audited["status"], "audit_passed")
             self.assertEqual(audited["task"]["name"], task_name)
+            self.assertEqual(audited["task"]["retry_interval"], "PT5M")
+            self.assertEqual(audited["task"]["retry_duration"], "P1D")
 
             weaken = (
                 "$settings=New-ScheduledTaskSettingsSet "
@@ -206,6 +238,53 @@ class CascResumeSchedulerTests(unittest.TestCase):
             rejected = self.invoke(plan, "-Audit", check=False)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("guarded policy", rejected.stderr)
+        finally:
+            cleaned = self.powershell(cleanup)
+            self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
+
+    def test_launch_disables_exact_task_before_controller(self) -> None:
+        plan = self.write_plan(
+            self.plan(hours_ahead=0, seconds_ahead=30),
+            "launch-plan.json",
+        )
+        preview = json.loads(self.invoke(plan).stdout)
+        task_name = preview["task"]["name"]
+        quoted_task_name = task_name.replace("'", "''")
+        cleanup = (
+            f"Stop-ScheduledTask -TaskName '{quoted_task_name}' "
+            "-ErrorAction SilentlyContinue; "
+            f"Unregister-ScheduledTask -TaskName '{quoted_task_name}' "
+            "-Confirm:$false -ErrorAction SilentlyContinue"
+        )
+        self.powershell(cleanup)
+        try:
+            self.invoke(plan, "-Register")
+            started = self.powershell(
+                f"Start-ScheduledTask -TaskName '{quoted_task_name}'"
+            )
+            self.assertEqual(started.returncode, 0, started.stderr)
+
+            deadline = time.monotonic() + 15
+            observation = self.task_observation(task_name)
+            while observation["enabled"] and time.monotonic() < deadline:
+                time.sleep(0.25)
+                observation = self.task_observation(task_name)
+            self.assertFalse(observation["enabled"], observation)
+            self.assertNotEqual(
+                observation["last_run_time"],
+                "1999-11-30T00:00:00.0000000Z",
+            )
+
+            last_run_time = observation["last_run_time"]
+            duplicate = self.powershell(
+                f"Start-ScheduledTask -TaskName '{quoted_task_name}'"
+            )
+            self.assertNotEqual(duplicate.returncode, 0)
+            time.sleep(1)
+            self.assertEqual(
+                self.task_observation(task_name)["last_run_time"],
+                last_run_time,
+            )
         finally:
             cleaned = self.powershell(cleanup)
             self.assertEqual(cleaned.returncode, 0, cleaned.stderr)

@@ -698,10 +698,18 @@ be executed directly instead of being disguised as scheduled work.
 Explicit `-Register` refuses replacement and creates one current-user task with
 the validated UTC trigger, exact action and working directory, wake/network and
 missed-start handling, battery-safe continuity, duplicate suppression, and a
-finite execution ceiling.  `-Audit` resolves the task principal to its SID and
-requires the trigger, action, principal, logon/run level, and every guarded
-setting to match before emitting machine-readable evidence.  It neither embeds
-credentials nor trusts the human-readable task name alone.
+finite execution ceiling.  The trigger retries every five minutes for a bounded
+24-hour window.  Its action calls this scheduler with the immutable plan rather
+than repeating the controller arguments.  The audited `-Launch` mode revalidates
+the plan and exact task, disables that task, confirms the disabled state, and
+only then invokes the validated repository controller.  A missed first boundary
+can therefore retry, while the first accepted launch prevents every later retry
+from duplicating either a successful or failed controller invocation.
+
+`-Audit` resolves the task principal to its SID and requires the trigger,
+repetition interval/duration, self-disabling action, principal, logon/run level,
+and every guarded setting to match before emitting machine-readable evidence.
+It neither embeds credentials nor trusts the human-readable task name alone.
 
 Reproduction commands are:
 
@@ -714,10 +722,15 @@ Reproduction commands are:
 python experiments/2026-07-28-004-casc-benchmark-matrix/test_schedule_casc_resume.py
 ```
 
-Three focused tests pass.  They cover default nonmutation, checkpoint/hash/path,
-argument and allowance rejection, and a real synthetic future task that is
-registered, audited, deliberately weakened, rejected, and removed in `finally`.
-Only the intended armed task remained afterward.  Its real audit passed against
+Four focused tests pass.  They cover default nonmutation, checkpoint/hash/path,
+argument and allowance rejection, and real synthetic future tasks.  One is
+registered, audited, deliberately weakened, rejected, and removed in `finally`;
+another is started early to model the first available retry, proves that it
+disables itself before the deliberately invalid synthetic checkpoint reaches
+the controller, and proves that a second start is refused without changing the
+last-run identity.  Exact cleanup leaves no synthetic tasks behind.
+
+The original one-shot task's real audit passed against
 plan SHA-256 `43b0d90a...`, checkpoint SHA-256 `1f51d7cc...`, J13 count 965,
 trigger `2026-08-03T05:00:10Z`, exact current-user SID, and all scheduler
 settings.  The ignored machine-readable audit is retained at
@@ -725,6 +738,29 @@ settings.  The ignored machine-readable audit is retained at
 `85e86505e1060b1383b2828f72e8decec155475d345e623fbecd3ac5e0bee473`.
 The tool schedules only future unavailable-now plans within 24 hours; it does
 not replace tasks or broaden the controller's provider authority.
+
+That original task also supplied the real missed-trigger reproduction.  The
+Windows machine was unavailable at `2026-08-03T05:00:10Z`; after it returned,
+the task remained `Ready`, had no next-run time, retained the sentinel
+1999-11-30 last-run time, and reported `0x41303` (never run), despite
+`StartWhenAvailable`.  A fresh exact audit and allowance check passed, so a
+manual `Start-ScheduledTask` launched the already validated controller.  Task
+Scheduler later recorded one overlapping catch-up attempt as refused
+(`0x800710E0`) under `IgnoreNew`; only the original controller and one provider
+runner exist.  This one-shot task predates the self-disabling wrapper and is
+left untouched while it owns the live slice.
+
+The live controller log is
+`.artifacts/casc-benchmark/j13-resume-controller-20260803T135618Z-4796.log`.
+It created high-memory runner `260803-135624-bc09` (Linode `102197229`, firewall
+`103413524`) from clean root commit `21176a9a` and source snapshot
+`d5016718...`.  Immutable upload hashes, restored 965-result inventory, report,
+1,350-problem preflight, frozen contract `9f29cac7...`, 8-core/131,072-MiB host,
+and strict cgroup-v2 checks passed.  At `2026-08-03T14:11:59Z`, service
+`casc-j13-v2-resume-260803-135624-bc09.service` retained MainPID `3995`,
+InvocationID `a38a1c59ffc94f0784a26b23f541a1b7`, zero restarts, and active/running
+state; the canonical result inventory had advanced to 970.  The controller
+continues to own validation, checkpoint capture, and exact resource deletion.
 
 ## Remaining acceptance boundary
 

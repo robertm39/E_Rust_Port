@@ -9,12 +9,20 @@ param(
     [Parameter(Mandatory = $true, ParameterSetName = "Audit")]
     [switch]$Audit,
 
+    [Parameter(Mandatory = $true, ParameterSetName = "Launch")]
+    [switch]$Launch,
+
     [ValidateRange(1, 24)]
     [int]$ExecutionTimeHours = 8
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+$retryInterval = New-TimeSpan -Minutes 5
+$retryDuration = New-TimeSpan -Hours 24
+$retryIntervalIso8601 = "PT5M"
+$retryDurationIso8601 = "P1D"
 
 function Get-RequiredProperty {
     param(
@@ -150,9 +158,16 @@ function Get-TaskEvidence {
         task = [ordered]@{
             name = $ValidatedPlan.task_name
             trigger_utc = $ValidatedPlan.not_before.ToString("O")
+            retry_interval = $retryIntervalIso8601
+            retry_duration = $retryDurationIso8601
+            disables_before_controller = $true
             execute = "powershell.exe"
             arguments = $ValidatedPlan.action_arguments
             working_directory = $ValidatedPlan.repo_root
+            controller = [ordered]@{
+                script = $ValidatedPlan.controller_path
+                arguments = $ValidatedPlan.controller_arguments
+            }
             principal = $ValidatedPlan.principal
             principal_sid = $ValidatedPlan.principal_sid
             logon_type = "Interactive"
@@ -337,15 +352,13 @@ function Get-ValidatedPlan {
         }
     }
 
-    $formattedArguments = @(
-        for ($index = 0; $index -lt $arguments.Count; $index++) {
-            Format-ActionArgument -Value $arguments[$index]
-        }
-    )
     $actionArguments = (
-        '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File {0} {1}' -f
-        (Format-ActionArgument -Value $controllerPath -AlwaysQuote),
-        ($formattedArguments -join ' ')
+        '-NoProfile -NonInteractive -ExecutionPolicy Bypass ' +
+        '-File {0} -Plan {1} -Launch -ExecutionTimeHours {2}' -f @(
+            (Format-ActionArgument -Value $PSCommandPath -AlwaysQuote),
+            (Format-ActionArgument -Value $canonicalPlan -AlwaysQuote),
+            $ExecutionTimeHours
+        )
     )
     $taskName = "Umlaut-CASC-{0}-Resume-{1}" -f @(
         $release.ToUpperInvariant(),
@@ -379,7 +392,9 @@ function Get-ValidatedPlan {
 function Assert-TaskMatches {
     param(
         [Parameter(Mandatory = $true)]
-        [object]$ValidatedPlan
+        [object]$ValidatedPlan,
+
+        [bool]$ExpectedEnabled = $true
     )
 
     $task = Get-ScheduledTask `
@@ -412,6 +427,14 @@ function Assert-TaskMatches {
     if ($triggerTime.ToUniversalTime() -ne $ValidatedPlan.not_before) {
         throw "Scheduled trigger does not match the validated UTC boundary"
     }
+    Assert-ExactString `
+        ([string]$trigger.Repetition.Interval) `
+        $retryIntervalIso8601 `
+        "scheduled retry interval"
+    Assert-ExactString `
+        ([string]$trigger.Repetition.Duration) `
+        $retryDurationIso8601 `
+        "scheduled retry duration"
     $taskPrincipalSid = Get-AccountSid -Account ([string]$task.Principal.UserId)
     Assert-ExactString `
         $taskPrincipalSid `
@@ -437,8 +460,8 @@ function Assert-TaskMatches {
     ) {
         throw "Scheduled CASC resume settings do not match the guarded policy"
     }
-    if (-not [bool]$task.Settings.Enabled) {
-        throw "Scheduled CASC resume task is disabled"
+    if ([bool]$task.Settings.Enabled -ne $ExpectedEnabled) {
+        throw "Scheduled CASC resume task enabled state does not match policy"
     }
 }
 
@@ -457,7 +480,9 @@ if ($Register) {
         -WorkingDirectory $validatedPlan.repo_root
     $trigger = New-ScheduledTaskTrigger `
         -Once `
-        -At $validatedPlan.not_before.ToLocalTime().DateTime
+        -At $validatedPlan.not_before.ToLocalTime().DateTime `
+        -RepetitionInterval $retryInterval `
+        -RepetitionDuration $retryDuration
     $settings = New-ScheduledTaskSettingsSet `
         -ExecutionTimeLimit (New-TimeSpan -Hours $ExecutionTimeHours) `
         -StartWhenAvailable `
@@ -487,6 +512,18 @@ if ($Audit) {
     Assert-TaskMatches -ValidatedPlan $validatedPlan
     Get-TaskEvidence -ValidatedPlan $validatedPlan -Status "audit_passed" |
         ConvertTo-Json -Depth 6
+    exit 0
+}
+
+if ($Launch) {
+    Assert-TaskMatches -ValidatedPlan $validatedPlan
+    Disable-ScheduledTask -TaskName $validatedPlan.task_name | Out-Null
+    Assert-TaskMatches `
+        -ValidatedPlan $validatedPlan `
+        -ExpectedEnabled $false
+
+    $controllerArguments = @($validatedPlan.controller_arguments)
+    & $validatedPlan.controller_path @controllerArguments
     exit 0
 }
 
