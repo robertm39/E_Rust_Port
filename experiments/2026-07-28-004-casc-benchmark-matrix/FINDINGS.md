@@ -918,8 +918,43 @@ zero matching batch/solver processes, both remote checkpoint paths absent, and
 11,691 seconds of remaining guarded high-memory allowance.  Eight focused
 tests cover the normal terminal record plus mixed invocation, wrong command,
 missing/duplicate success, terminal-before-summary, and mixed-boot
-falsifications.  The runner is intentionally retained until the patched
-controller captures and fully validates the checkpoint.
+falsifications.
+
+The patched completed-service controller at clean main commit `0ada6162`
+repeated every identity/hash/count/collision gate, regenerated the CASC-2025,
+J13, and combined reports, and captured
+`.artifacts/casc-benchmark/j13-checkpoint-260803-135624-bc09.tar.gz`.  Its
+17,524,998 bytes hash to
+`72dcf94ffa7c0c8f8d5c7027a8118c20f29e61ca5a2e822d0cd24f7e791ab7e1`.
+The streaming validator proved 1,457/2,700 J13 results (729 Umlaut, 728
+Vampire), 1,457/8,502 combined results, 4,251 targeted problems, all 66
+contextual CSVs, a 4,451-member inner archive, success/zero-restart lifecycle,
+and complete report acceptance surfaces.  Controller and independent sidecars
+are byte-identical with SHA-256
+`8ebf9dc4f4d6da2d531b6719339f0370ab91f8e2e81caf56fd472bc24d9b2745`.
+
+An additional independent archive audit verified all 12 outer hashes, 13
+regular members, 1,457 sorted unique result paths, 497 JSON journal records,
+terminal sequence 15,491, the exact invocation/PID/boot/command chain, masked
+maintenance, and empty solver-unit/cgroup residue.  Controller log
+`.artifacts/casc-benchmark/j13-resume-controller-20260803T181948Z-4924.log`
+records `checkpoint_verified` followed by deletion of exact Linode
+`102197229`, firewall `103413524`, and `managed_resources_deleted`; runner
+status is now active null with no parked host.  Both obsolete disabled task
+definitions were removed after their final results were recorded.
+
+The successor planner independently selected J13 1,457/2,700 from that archive.
+At `2026-08-03T18:22:14Z`, only 11,481 of the required 14,700 seconds remained,
+so it emitted the unavailable-now plan
+`.artifacts/casc-benchmark/j13-1457-next-resume-plan-260804.json`, SHA-256
+`50c8bcbad1002cd953759d4bc943fd8ef0450b5140107bc4c3be51e15d0d4458`,
+for `2026-08-04T05:00:10Z`.  Real task
+`Umlaut-CASC-J13-Resume-20260804T050010Z` is registered and independently
+audited: enabled/Ready, current-user limited principal, exact plan-bound
+self-disabling action, five-minute retries for one day, wake/network/
+start-available policy, `IgnoreNew`, and eight-hour ceiling.  This supplies the
+real successor gate required by the missed-trigger repair while leaving the
+incomplete matrix campaign active.
 
 ## Remaining acceptance boundary
 
