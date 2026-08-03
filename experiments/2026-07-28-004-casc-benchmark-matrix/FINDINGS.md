@@ -663,6 +663,23 @@ controller/planner tests, 26 batch/report tests, and 11 checkpoint-validator
 tests pass with both PowerShell parsers, Python compilation, and whitespace
 validation.
 
+A short verification-only canonical-host run then closed the remaining
+prelaunch uncertainty.  Runner `260803-000214-c49b` (Linode `102152777`,
+firewall `102320675`) used pushed root commit `20eefad6` and source snapshot
+SHA-256 `2a7f539356e7974f48a6a519e522c2dede272cefa08d565954e32b2aa9604404`;
+its package-maintenance record SHA-256 was
+`1deba3724e73b974dfa784074e4bd29dddd17623e214d0510cf2c2654f22569a`.
+The exact two-phase controller preflight passed every immutable hash, corpus
+extraction, inner checkpoint hash, contract-file hash, reconstructed 965-result
+report/inventory, multiline assertion, historical frozen-contract comparison,
+8-core/131,072-MiB host validation, and strict cgroup-v2 check.  Its terminal
+message was `OK: contract 9f29cac7..., 1350 selected problems, strict cgroup v2
+available`.  `--verify-only` launched no solver or service.  The diagnostic
+Linode and firewall were immediately deleted.  High-memory accounting then
+showed 12,900 seconds remaining today and 27,300 seconds projected at the next
+boundary, still safely above the scheduled 14,700-second ceiling; the scheduled
+task remains `Ready` for `2026-08-03T05:00:10Z`.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
