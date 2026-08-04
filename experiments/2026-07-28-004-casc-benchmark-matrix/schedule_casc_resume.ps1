@@ -465,6 +465,40 @@ function Assert-TaskMatches {
     }
 }
 
+function Invoke-LoggedController {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ControllerPath,
+
+        [Parameter(Mandatory = $true)]
+        [object[]]$ControllerArguments,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LogPath
+    )
+
+    $writeLog = {
+        param([Parameter(Mandatory = $true)][string]$Message)
+
+        $timestamp = [DateTimeOffset]::UtcNow.ToString("O")
+        [IO.File]::AppendAllText($LogPath, "$timestamp $Message`r`n")
+    }
+    & $writeLog "controller_invocation_started path=$ControllerPath"
+    try {
+        & $ControllerPath @ControllerArguments *>&1 | ForEach-Object {
+            $text = [string]$_
+            if (-not [string]::IsNullOrEmpty($text)) {
+                & $writeLog "controller_output $text"
+            }
+        }
+        & $writeLog "controller_invocation_completed"
+    }
+    catch {
+        & $writeLog "controller_invocation_failed error=$($_.Exception.Message)"
+        throw
+    }
+}
+
 $validatedPlan = Get-ValidatedPlan -PlanPath $Plan
 
 if ($Register) {
@@ -516,15 +550,58 @@ if ($Audit) {
 }
 
 if ($Launch) {
-    Assert-TaskMatches -ValidatedPlan $validatedPlan
-    Disable-ScheduledTask -TaskName $validatedPlan.task_name | Out-Null
-    Assert-TaskMatches `
-        -ValidatedPlan $validatedPlan `
-        -ExpectedEnabled $false
+    $artifactRoot = Join-Path $validatedPlan.repo_root ".artifacts\casc-benchmark"
+    [IO.Directory]::CreateDirectory($artifactRoot) | Out-Null
+    $launchId = (
+        [DateTimeOffset]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-$PID"
+    )
+    $launchLog = Join-Path (
+        $artifactRoot
+    ) "scheduled-launch-$($validatedPlan.release)-$launchId.log"
+    if (Test-Path -LiteralPath $launchLog) {
+        throw "Refusing to overwrite scheduled-launch log: $launchLog"
+    }
+    $startedAt = [DateTimeOffset]::UtcNow.ToString("O")
+    [IO.File]::WriteAllText(
+        $launchLog,
+        (
+            "$startedAt task_launch_started " +
+            "task=$($validatedPlan.task_name) " +
+            "plan_sha256=$($validatedPlan.plan_sha256)`r`n"
+        )
+    )
+    try {
+        Assert-TaskMatches -ValidatedPlan $validatedPlan
+        Disable-ScheduledTask -TaskName $validatedPlan.task_name | Out-Null
+        Assert-TaskMatches `
+            -ValidatedPlan $validatedPlan `
+            -ExpectedEnabled $false
+        [IO.File]::AppendAllText(
+            $launchLog,
+            "$([DateTimeOffset]::UtcNow.ToString('O')) task_disabled`r`n"
+        )
 
-    $controllerArguments = @($validatedPlan.controller_arguments)
-    & $validatedPlan.controller_path @controllerArguments
-    exit 0
+        $controllerArguments = @($validatedPlan.controller_arguments)
+        Invoke-LoggedController `
+            -ControllerPath $validatedPlan.controller_path `
+            -ControllerArguments $controllerArguments `
+            -LogPath $launchLog
+        [IO.File]::AppendAllText(
+            $launchLog,
+            "$([DateTimeOffset]::UtcNow.ToString('O')) task_launch_completed`r`n"
+        )
+        exit 0
+    }
+    catch {
+        [IO.File]::AppendAllText(
+            $launchLog,
+            (
+                "$([DateTimeOffset]::UtcNow.ToString('O')) " +
+                "task_launch_failed error=$($_.Exception.Message)`r`n"
+            )
+        )
+        throw
+    }
 }
 
 Get-TaskEvidence -ValidatedPlan $validatedPlan -Status "ready_to_register" |

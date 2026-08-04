@@ -247,6 +247,10 @@ class CascResumeSchedulerTests(unittest.TestCase):
             self.plan(hours_ahead=0, seconds_ahead=30),
             "launch-plan.json",
         )
+        existing_launch_logs = set(
+            ARTIFACT_ROOT.glob("scheduled-launch-j13-*.log")
+        )
+        created_launch_logs: set[Path] = set()
         preview = json.loads(self.invoke(plan).stdout)
         task_name = preview["task"]["name"]
         quoted_task_name = task_name.replace("'", "''")
@@ -274,6 +278,24 @@ class CascResumeSchedulerTests(unittest.TestCase):
                 observation["last_run_time"],
                 "1999-11-30T00:00:00.0000000Z",
             )
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                created_launch_logs = (
+                    set(ARTIFACT_ROOT.glob("scheduled-launch-j13-*.log"))
+                    - existing_launch_logs
+                )
+                if created_launch_logs:
+                    break
+                time.sleep(0.25)
+            self.assertEqual(len(created_launch_logs), 1)
+            launch_log = next(iter(created_launch_logs)).read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("task_launch_started", launch_log)
+            self.assertIn("task_disabled", launch_log)
+            self.assertIn("controller_invocation_started", launch_log)
+            self.assertIn("controller_invocation_failed", launch_log)
+            self.assertIn("task_launch_failed", launch_log)
 
             last_run_time = observation["last_run_time"]
             duplicate = self.powershell(
@@ -288,6 +310,63 @@ class CascResumeSchedulerTests(unittest.TestCase):
         finally:
             cleaned = self.powershell(cleanup)
             self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
+            for path in created_launch_logs:
+                path.unlink(missing_ok=True)
+
+    def test_logged_controller_records_success_and_failure(self) -> None:
+        success_script = self.root / "success-controller.ps1"
+        success_script.write_text(
+            'param([string]$Value)\nWrite-Output "success-$Value"\n',
+            encoding="utf-8",
+        )
+        failure_script = self.root / "failure-controller.ps1"
+        failure_script.write_text(
+            'Write-Output "before-failure"\nthrow "synthetic failure"\n',
+            encoding="utf-8",
+        )
+
+        def invoke_function(controller: Path, log: Path, *arguments: str):
+            def quote(value: str) -> str:
+                return "'" + value.replace("'", "''") + "'"
+
+            arguments_text = ",".join(quote(value) for value in arguments)
+            command = (
+                "$ErrorActionPreference='Stop'; $tokens=$null; $errors=$null; "
+                f"$ast=[Management.Automation.Language.Parser]::ParseFile({quote(str(SCRIPT))},"
+                "[ref]$tokens,[ref]$errors); if($errors.Count){throw $errors[0]}; "
+                "$definition=$ast.FindAll({param($node) "
+                "$node -is [Management.Automation.Language.FunctionDefinitionAst] "
+                "-and $node.Name -eq 'Invoke-LoggedController'},$true); "
+                "if($definition.Count -ne 1){throw 'function definition mismatch'}; "
+                "Invoke-Expression $definition[0].Extent.Text; "
+                f"Invoke-LoggedController -ControllerPath {quote(str(controller))} "
+                f"-ControllerArguments @({arguments_text}) -LogPath {quote(str(log))}"
+            )
+            return self.powershell(command)
+
+        success_log = self.root / "success.log"
+        succeeded = invoke_function(success_script, success_log, "exact")
+        self.assertEqual(succeeded.returncode, 0, succeeded.stderr)
+        success_text = success_log.read_text(encoding="utf-8")
+        self.assertIn("controller_invocation_started", success_text)
+        self.assertIn("controller_output success-exact", success_text)
+        self.assertIn("controller_invocation_completed", success_text)
+        self.assertNotIn("controller_invocation_failed", success_text)
+
+        failure_log = self.root / "failure.log"
+        failed = invoke_function(failure_script, failure_log, "unused")
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertTrue(
+            failure_log.is_file(),
+            f"stdout={failed.stdout!r} stderr={failed.stderr!r}",
+        )
+        failure_text = failure_log.read_text(encoding="utf-8")
+        self.assertIn("controller_output before-failure", failure_text)
+        self.assertIn(
+            "controller_invocation_failed error=synthetic failure",
+            failure_text,
+        )
+        self.assertNotIn("controller_invocation_completed", failure_text)
 
 
 if __name__ == "__main__":

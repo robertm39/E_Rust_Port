@@ -1056,6 +1056,28 @@ new archive/hash/count, self-disable-before-controller action, five-minute
 one-day retries, limited current-user principal, wake/network/start-available
 settings, `IgnoreNew`, and eight-hour ceiling.
 
+## Pre-controller scheduled-launch evidence
+
+The 1,531-result task fired at exactly `2026-08-04T05:00:10Z`, disabled itself,
+and returned task result 1 before provisioning.  At the first post-trigger
+audit there was no matching controller process or controller log, no active or
+parked runner, and no new artifact.  A direct nonexecuting controller plan
+subsequently revalidated the archive, count, campaign state, and every immutable
+input.  The sole worktree difference was Beads exporting the completed
+`E_Rust_Port-9jt.2.7.6` row over the stale committed `in_progress` JSONL row.
+That is consistent with the controller's clean-worktree preflight rejecting the
+launch before its log is created; no provider contact occurred.
+
+The scheduled launcher now creates a unique ignored launch log before checking
+or disabling the task.  It records the task and plan hash, the successful
+self-disable, controller invocation, nonempty controller output as it arrives,
+and a terminal completion or exception.  The controller's own log remains the
+authoritative provider/run record after its clean-main gate.  Functional tests
+execute synthetic successful and failing controllers and prove both terminal
+records; the real Task Scheduler test proves a deliberately invalid checkpoint
+still self-disables before controller execution while preserving the complete
+failure chain.  Test-created tasks and logs are removed afterward.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
