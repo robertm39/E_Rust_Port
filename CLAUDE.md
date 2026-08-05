@@ -107,11 +107,13 @@ compile-only and is never executed. See `DOCS.md` and
 The default 8 GiB profile costs $0.14 an hour. Use `--high-memory` only when a
 task should more closely resemble the CASC configuration; its 150 GB profile
 costs $0.74 an hour. No new high-memory `up` or `run` may start after managed
-high-memory usage reaches the current fixed UTC-05:00 day's bank-adjusted
-capacity (no daylight-saving adjustment). The four-hour daily base accrues into
-a bank capped at four hours; overuse consumes the bank and then becomes uncapped
-debt that reduces later capacity. Check actual usage, bank, debt, and capacity
-with `.\linode-runner.ps1 check --high-memory`. For a closer CASC match, give
+high-memory usage reaches the 100-hour limit in the current fixed UTC-05:00
+calendar month (no daylight-saving adjustment). Each distinct Linode
+lifecycle's monthly overlap is rounded up to a whole hour; reuse is not rounded
+separately and cross-month overlaps are rounded in each month. There is no banking
+and no debt; an overrun does not reduce the next month's allowance. Check exact elapsed,
+billed, and remaining usage with `.\linode-runner.ps1 check --high-memory`.
+For a closer CASC match, give
 every actual prover process `--memory-limit=131072`, the prover's MB value for
 128 GiB.
 

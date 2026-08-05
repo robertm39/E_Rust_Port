@@ -37,7 +37,7 @@ DEFAULT_REGION = "us-ord"
 DEFAULT_IMAGE = "linode/ubuntu24.04"
 LABEL_PREFIX = "e-rust-codex-"
 FIXED_EST = timezone(timedelta(hours=-5), name="EST")
-HIGH_MEMORY_DAILY_LIMIT = timedelta(hours=4)
+HIGH_MEMORY_MONTHLY_LIMIT = timedelta(hours=100)
 REMOTE_ROOT = PurePosixPath("/opt/e-rust-port")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_APP_DATA = Path(
@@ -99,61 +99,26 @@ PLAN_SPECS = {
 
 
 class HighMemoryUsage(NamedTuple):
-    """Bank-adjusted high-memory usage within one fixed-EST accounting day."""
+    """High-memory usage within one fixed-EST calendar month."""
 
-    actual: timedelta
-    balance_at_start: timedelta
-    day_start: datetime
-    next_boundary: datetime
-
-    @property
-    def banked_at_start(self) -> timedelta:
-        return max(self.balance_at_start, timedelta())
-
-    @property
-    def debt_at_start(self) -> timedelta:
-        return max(-self.balance_at_start, timedelta())
-
-    @property
-    def capacity(self) -> timedelta:
-        return max(HIGH_MEMORY_DAILY_LIMIT + self.balance_at_start, timedelta())
+    elapsed: timedelta
+    billed: timedelta
+    month_start: datetime
+    next_month_start: datetime
 
     @property
     def remaining(self) -> timedelta:
-        return max(self.capacity - self.actual, timedelta())
-
-    @property
-    def next_balance(self) -> timedelta:
-        return min(
-            HIGH_MEMORY_DAILY_LIMIT,
-            self.balance_at_start + HIGH_MEMORY_DAILY_LIMIT - self.actual,
-        )
-
-    @property
-    def banked_at_next_boundary(self) -> timedelta:
-        return max(self.next_balance, timedelta())
-
-    @property
-    def debt_at_next_boundary(self) -> timedelta:
-        return max(-self.next_balance, timedelta())
+        return max(HIGH_MEMORY_MONTHLY_LIMIT - self.billed, timedelta())
 
     @property
     def exhausted(self) -> bool:
-        return self.actual >= self.capacity
+        return self.billed >= HIGH_MEMORY_MONTHLY_LIMIT
 
     @property
     def projected_eligible_at(self) -> datetime:
-        """Earliest boundary allowing a start if no additional usage accrues."""
+        """Next boundary allowing a start without carryover or debt."""
 
-        balance = self.next_balance
-        boundary = self.next_boundary
-        while HIGH_MEMORY_DAILY_LIMIT + balance <= timedelta():
-            balance = min(
-                HIGH_MEMORY_DAILY_LIMIT,
-                balance + HIGH_MEMORY_DAILY_LIMIT,
-            )
-            boundary += timedelta(days=1)
-        return boundary
+        return self.next_month_start
 
 
 class RunnerError(RuntimeError):
@@ -209,19 +174,33 @@ def format_utc(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
-def fixed_est_day_bounds(now: datetime) -> tuple[datetime, datetime]:
-    """Return fixed UTC-05:00 accounting-day bounds expressed in UTC."""
+def fixed_est_month_bounds(now: datetime) -> tuple[datetime, datetime]:
+    """Return fixed UTC-05:00 calendar-month bounds expressed in UTC."""
 
     fixed_now = now.astimezone(FIXED_EST)
-    day_start = datetime.combine(
-        fixed_now.date(),
-        datetime.min.time(),
+    month_start = datetime(
+        fixed_now.year,
+        fixed_now.month,
+        1,
         tzinfo=FIXED_EST,
     )
-    next_reset = day_start + timedelta(days=1)
+    if fixed_now.month == 12:
+        next_month_start = datetime(
+            fixed_now.year + 1,
+            1,
+            1,
+            tzinfo=FIXED_EST,
+        )
+    else:
+        next_month_start = datetime(
+            fixed_now.year,
+            fixed_now.month + 1,
+            1,
+            tzinfo=FIXED_EST,
+        )
     return (
-        day_start.astimezone(timezone.utc),
-        next_reset.astimezone(timezone.utc),
+        month_start.astimezone(timezone.utc),
+        next_month_start.astimezone(timezone.utc),
     )
 
 
@@ -582,6 +561,32 @@ def high_memory_state_interval(
     return linode_id, started_at, ended_at
 
 
+def rounded_billing_duration(value: timedelta) -> timedelta:
+    """Round a positive duration up to Linode's whole-hour billing unit."""
+
+    seconds = value.total_seconds()
+    if seconds <= 0:
+        return timedelta()
+    billed_hours = math.ceil(seconds / BILLING_HOUR.total_seconds())
+    return billed_hours * BILLING_HOUR
+
+
+def billed_month_overlap(
+    started_at: datetime,
+    ended_at: datetime,
+    month_start: datetime,
+    next_month_start: datetime,
+) -> tuple[timedelta, timedelta]:
+    """Return exact and whole-hour-billed overlap with one month."""
+
+    overlap_start = max(started_at, month_start)
+    overlap_end = min(ended_at, next_month_start)
+    if overlap_end <= overlap_start:
+        return timedelta(), timedelta()
+    elapsed = overlap_end - overlap_start
+    return elapsed, rounded_billing_duration(elapsed)
+
+
 def high_memory_usage(
     now: datetime,
     *,
@@ -590,7 +595,7 @@ def high_memory_usage(
     current_state_path: Path | None = None,
     parked_root: Path | None = None,
 ) -> HighMemoryUsage:
-    """Replay trusted history and return current bank-adjusted usage."""
+    """Return current-month elapsed and whole-hour-billed usage."""
 
     history = RUN_HISTORY if history_root is None else history_root
     current = CURRENT_STATE if current_state_path is None else current_state_path
@@ -670,36 +675,23 @@ def high_memory_usage(
             )
         intervals[linode_id] = (started_at, now)
 
-    day_start, next_boundary = fixed_est_day_bounds(now)
-    if intervals:
-        first_day, _ = fixed_est_day_bounds(
-            min(started_at for started_at, _ended_at in intervals.values())
+    month_start, next_month_start = fixed_est_month_bounds(now)
+    elapsed = timedelta()
+    billed = timedelta()
+    for started_at, ended_at in intervals.values():
+        interval_elapsed, interval_billed = billed_month_overlap(
+            started_at,
+            ended_at,
+            month_start,
+            next_month_start,
         )
-    else:
-        first_day = day_start
-    balance_at_start = HIGH_MEMORY_DAILY_LIMIT
-    actual = timedelta()
-    accounting_day = first_day
-    while accounting_day <= day_start:
-        following_day = accounting_day + timedelta(days=1)
-        actual = timedelta()
-        for started_at, ended_at in intervals.values():
-            overlap_start = max(started_at, accounting_day)
-            overlap_end = min(ended_at, following_day)
-            if overlap_end > overlap_start:
-                actual += overlap_end - overlap_start
-        if accounting_day == day_start:
-            break
-        balance_at_start = min(
-            HIGH_MEMORY_DAILY_LIMIT,
-            balance_at_start + HIGH_MEMORY_DAILY_LIMIT - actual,
-        )
-        accounting_day = following_day
+        elapsed += interval_elapsed
+        billed += interval_billed
     return HighMemoryUsage(
-        actual=actual,
-        balance_at_start=balance_at_start,
-        day_start=day_start,
-        next_boundary=next_boundary,
+        elapsed=elapsed,
+        billed=billed,
+        month_start=month_start,
+        next_month_start=next_month_start,
     )
 
 
@@ -711,33 +703,26 @@ def format_duration(value: timedelta) -> str:
 
 
 def report_high_memory_usage(usage: HighMemoryUsage) -> None:
-    day = usage.day_start.astimezone(FIXED_EST).date().isoformat()
-    boundary_est = usage.next_boundary.astimezone(FIXED_EST).isoformat()
-    boundary_utc = format_utc(usage.next_boundary)
-    print(f"High-memory usage for {day} fixed EST (UTC-05:00)")
-    print(f"Daily base allowance: {format_duration(HIGH_MEMORY_DAILY_LIMIT)}")
-    print(f"Banked usage at start of day: {format_duration(usage.banked_at_start)}")
-    print(f"Usage debt at start of day: {format_duration(usage.debt_at_start)}")
-    print(f"Adjusted daily capacity: {format_duration(usage.capacity)}")
-    print(f"Actual Linode lifetime today: {format_duration(usage.actual)}")
+    month = usage.month_start.astimezone(FIXED_EST).strftime("%Y-%m")
+    boundary_est = usage.next_month_start.astimezone(FIXED_EST).isoformat()
+    boundary_utc = format_utc(usage.next_month_start)
+    print(f"High-memory usage for {month} fixed EST (UTC-05:00)")
+    print(f"Monthly allowance: {format_duration(HIGH_MEMORY_MONTHLY_LIMIT)}")
+    print(f"Exact Linode lifetime this month: {format_duration(usage.elapsed)}")
+    print(
+        "Whole-hour billed usage this month: "
+        f"{format_duration(usage.billed)}"
+    )
     print(
         "Remaining before new starts are blocked: "
         f"{format_duration(usage.remaining)}"
     )
-    print(f"Next accounting boundary: {boundary_est} ({boundary_utc} UTC)")
-    print(
-        "Projected bank at next boundary if no further usage accrues: "
-        f"{format_duration(usage.banked_at_next_boundary)}"
-    )
-    print(
-        "Projected debt at next boundary if no further usage accrues: "
-        f"{format_duration(usage.debt_at_next_boundary)}"
-    )
+    print(f"Next monthly boundary: {boundary_est} ({boundary_utc} UTC)")
     if usage.exhausted:
         eligible_est = usage.projected_eligible_at.astimezone(FIXED_EST).isoformat()
         eligible_utc = format_utc(usage.projected_eligible_at)
         print(
-            "Projected earliest new start if no further usage accrues: "
+            "Earliest new start after the monthly reset: "
             f"{eligible_est} ({eligible_utc} UTC)"
         )
 
@@ -752,58 +737,43 @@ def high_memory_usage_record(
     """Return exact machine-readable scheduling state for guarded automation."""
 
     earliest = observed_at if not usage.exhausted else usage.projected_eligible_at
-    next_capacity = max(
-        HIGH_MEMORY_DAILY_LIMIT + usage.next_balance,
-        timedelta(),
-    )
     required_start: datetime | None = None
+    required_billed: timedelta | None = None
     if required_seconds is not None:
         required = timedelta(seconds=required_seconds)
-        if required <= usage.remaining:
+        required_billed = rounded_billing_duration(required)
+        if required_billed <= usage.remaining:
             required_start = observed_at
-        elif required <= HIGH_MEMORY_DAILY_LIMIT * 2:
-            required_start = usage.next_boundary
-            balance = usage.next_balance
-            while max(HIGH_MEMORY_DAILY_LIMIT + balance, timedelta()) < required:
-                balance = min(
-                    HIGH_MEMORY_DAILY_LIMIT,
-                    balance + HIGH_MEMORY_DAILY_LIMIT,
-                )
-                required_start += timedelta(days=1)
+        elif required_billed <= HIGH_MEMORY_MONTHLY_LIMIT:
+            required_start = usage.next_month_start
     value = {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "umlaut-linode-high-memory-allowance",
         "accounting_timezone": "fixed UTC-05:00",
         "observed_at_utc": format_utc(observed_at),
-        "day_start_utc": format_utc(usage.day_start),
-        "next_boundary_utc": format_utc(usage.next_boundary),
+        "month_start_utc": format_utc(usage.month_start),
+        "next_month_start_utc": format_utc(usage.next_month_start),
         "earliest_new_start_utc": format_utc(earliest),
         "new_starts_allowed": not usage.exhausted,
         "active_managed_high_memory": active_managed_high_memory,
-        "daily_base_seconds": int(HIGH_MEMORY_DAILY_LIMIT.total_seconds()),
-        "banked_at_start_seconds": int(usage.banked_at_start.total_seconds()),
-        "debt_at_start_seconds": int(usage.debt_at_start.total_seconds()),
-        "capacity_seconds": int(usage.capacity.total_seconds()),
-        "actual_seconds": int(usage.actual.total_seconds()),
+        "monthly_limit_seconds": int(HIGH_MEMORY_MONTHLY_LIMIT.total_seconds()),
+        "elapsed_seconds": int(usage.elapsed.total_seconds()),
+        "billed_usage_seconds": int(usage.billed.total_seconds()),
         "remaining_seconds": int(usage.remaining.total_seconds()),
-        "projected_capacity_at_next_boundary_seconds": int(
-            next_capacity.total_seconds()
-        ),
-        "banked_at_next_boundary_seconds": int(
-            usage.banked_at_next_boundary.total_seconds()
-        ),
-        "debt_at_next_boundary_seconds": int(
-            usage.debt_at_next_boundary.total_seconds()
-        ),
     }
     if required_seconds is not None:
+        assert required_billed is not None
         value["required_seconds"] = required_seconds
+        value["required_billed_seconds"] = int(
+            required_billed.total_seconds()
+        )
         value["required_start_available_now"] = required_start == observed_at
         value["projected_earliest_required_start_utc"] = (
             format_utc(required_start) if required_start is not None else None
         )
         value["required_start_projection_warning"] = (
-            "The projection assumes no additional high-memory usage accrues."
+            "This boundary is informational; the controller does not wait, "
+            "schedule, or retry automatically."
         )
     return value
 
@@ -836,10 +806,9 @@ def report_high_memory_allowance_json(
 def require_high_memory_allowance(usage: HighMemoryUsage) -> None:
     if usage.exhausted:
         raise RunnerError(
-            "High-memory usage has reached today's bank-adjusted capacity "
-            f"of {format_duration(usage.capacity)}; "
-            "no new high-memory run may start now. If no further usage accrues, "
-            f"the projected earliest eligible boundary is "
+            "High-memory usage has reached this month's whole-hour-billed "
+            f"allowance of {format_duration(HIGH_MEMORY_MONTHLY_LIMIT)}; "
+            "no new high-memory run may start now. The next eligible boundary is "
             f"{usage.projected_eligible_at.astimezone(FIXED_EST).isoformat()} "
             "fixed EST"
         )

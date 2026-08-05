@@ -792,11 +792,15 @@ function Get-RequiredHighMemoryAllowance {
     catch {
         throw "Could not parse high-memory allowance JSON"
     }
+    $requiredBilledSeconds = [int](
+        [Math]::Ceiling($RequiredSeconds / 3600.0) * 3600
+    )
     if (
-        [int]$allowance.schema_version -ne 1 -or
+        [int]$allowance.schema_version -ne 2 -or
         [string]$allowance.kind -ne "umlaut-linode-high-memory-allowance" -or
         [int]$allowance.required_seconds -ne $RequiredSeconds -or
-        [int]$allowance.remaining_seconds -lt $RequiredSeconds -or
+        [int]$allowance.required_billed_seconds -ne $requiredBilledSeconds -or
+        [int]$allowance.remaining_seconds -lt $requiredBilledSeconds -or
         [int]$allowance.active_managed_high_memory -ne
             $ExpectedActiveManagedHighMemory -or
         (

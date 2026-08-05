@@ -8,7 +8,7 @@ import json
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -107,10 +107,12 @@ def build_resume_plan(
     completed_results: int,
     allowance: dict[str, Any],
     max_session_wall_seconds: int,
-    boundary_guard_seconds: int,
 ) -> dict[str, Any]:
     config = RELEASES[release]
     service_runtime_seconds = max_session_wall_seconds + 300
+    required_billed_seconds = (
+        (service_runtime_seconds + 3599) // 3600
+    ) * 3600
     if isinstance(completed_results, bool) or not isinstance(
         completed_results, int
     ):
@@ -122,10 +124,14 @@ def build_resume_plan(
             allowance.get("kind"),
             "umlaut-linode-high-memory-allowance",
         ),
-        "allowance schema": (allowance.get("schema_version"), 1),
+        "allowance schema": (allowance.get("schema_version"), 2),
         "required seconds": (
             allowance.get("required_seconds"),
             service_runtime_seconds,
+        ),
+        "required billed seconds": (
+            allowance.get("required_billed_seconds"),
+            required_billed_seconds,
         ),
         "active high-memory hosts": (
             allowance.get("active_managed_high_memory"),
@@ -137,15 +143,21 @@ def build_resume_plan(
             raise PlanningError(f"{name} mismatch: {actual!r} != {expected!r}")
 
     observed_at = parse_utc(allowance.get("observed_at_utc"), "observed_at_utc")
+    next_month_start = parse_utc(
+        allowance.get("next_month_start_utc"),
+        "next_month_start_utc",
+    )
+    if next_month_start <= observed_at:
+        raise PlanningError("allowance next month boundary is not in the future")
     required_now = allowance.get("required_start_available_now")
     if not isinstance(required_now, bool):
         raise PlanningError("allowance has no Boolean required-start decision")
     remaining = allowance.get("remaining_seconds")
     if isinstance(remaining, bool) or not isinstance(remaining, int):
         raise PlanningError("allowance has an invalid remaining duration")
-    if required_now != (remaining >= service_runtime_seconds):
+    if required_now != (remaining >= required_billed_seconds):
         raise PlanningError("allowance required-start decision is inconsistent")
-    not_before: datetime | None = None
+    projected: datetime | None = None
     if not required_now:
         projected = parse_utc(
             allowance.get("projected_earliest_required_start_utc"),
@@ -153,7 +165,10 @@ def build_resume_plan(
         )
         if projected < observed_at:
             raise PlanningError("allowance projects a required start in the past")
-        not_before = projected + timedelta(seconds=boundary_guard_seconds)
+        if projected != next_month_start:
+            raise PlanningError(
+                "allowance projection does not match the next month boundary"
+            )
 
     result: dict[str, Any] = {
         "schema_version": 1,
@@ -168,7 +183,9 @@ def build_resume_plan(
         "allowance": {
             "observed_at_utc": allowance["observed_at_utc"],
             "required_seconds": service_runtime_seconds,
+            "required_billed_seconds": required_billed_seconds,
             "required_start_available_now": required_now,
+            "next_month_start_utc": allowance.get("next_month_start_utc"),
             "projected_earliest_required_start_utc": allowance.get(
                 "projected_earliest_required_start_utc"
             ),
@@ -179,8 +196,8 @@ def build_resume_plan(
         result["status"] = "release_complete"
         result["controller"] = None
         return result
-    if not_before is not None and not_before > observed_at + timedelta(hours=24):
-        result["status"] = "replan_within_24_hours"
+    if not required_now:
+        result["status"] = "wait_for_monthly_allowance"
         result["controller"] = None
         return result
 
@@ -196,10 +213,6 @@ def build_resume_plan(
         "-MaxSessionWallSeconds",
         str(max_session_wall_seconds),
     ]
-    if not_before is not None:
-        arguments.extend(
-            ["-NotBeforeUtc", not_before.isoformat(timespec="seconds")]
-        )
     arguments.append("-Execute")
     result["status"] = "ready_to_arm"
     result["controller"] = {
@@ -410,7 +423,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--checkpoint-sha256", required=True)
     parser.add_argument("--max-session-wall-seconds", type=int, default=14400)
-    parser.add_argument("--boundary-guard-seconds", type=int, default=10)
     parser.add_argument(
         "--inspect-only",
         action="store_true",
@@ -427,8 +439,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         checkpoint_sha256 = arguments.checkpoint_sha256.lower()
         if arguments.max_session_wall_seconds <= 0:
             raise PlanningError("--max-session-wall-seconds must be positive")
-        if not 0 <= arguments.boundary_guard_seconds <= 60:
-            raise PlanningError("--boundary-guard-seconds must be in 0..60")
         if len(checkpoint_sha256) != 64 or any(
             value not in "0123456789abcdef" for value in checkpoint_sha256
         ):
@@ -583,7 +593,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             completed_results=selected_count,
             allowance=allowance,
             max_session_wall_seconds=arguments.max_session_wall_seconds,
-            boundary_guard_seconds=arguments.boundary_guard_seconds,
         )
         emit_plan(plan, arguments.output)
         return 0

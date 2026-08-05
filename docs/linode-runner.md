@@ -28,47 +28,43 @@ The prover option is expressed in MB, so `131072` represents 128 GiB. The
 controller does not inject this option automatically; include it in every
 CASC-oriented Umlaut command.
 
-High-memory starts have a mandatory bank-adjusted daily cost guard. The base
-allowance is four hours per accounting day. Unused base allowance is added to a
-bank capped at four hours, so a full bank raises one day's capacity to eight
-hours. Existing trusted history is replayed as though the bank was full before
-the earliest recorded run; no separate balance file is required.
-
-The balance is fixed at the start of each day. Positive balance is banked usage;
-negative balance is uncapped usage debt. The controller computes:
+High-memory starts have a mandatory 100-hour calendar-month cost guard. Each
+distinct Linode creation-to-deletion lifecycle counts its overlap with the
+current accounting month, rounded up to a whole hour:
 
 ```text
-daily capacity = max(0, 4 hours + starting balance)
-next balance = min(4 hours, starting balance + 4 hours - actual usage)
+billed usage = ceil(current-month overlap / 1 hour) * 1 hour
 ```
 
-The controller refuses another high-memory `up` or `run` once actual usage
-reaches the day's capacity. A start is allowed while usage is below capacity
-even if that run later crosses the threshold; the overshoot becomes debt.
-Empty days add four hours, first repaying debt and then filling the bank.
-Normal-profile starts are not restricted by high-memory usage.
+Thus a 55-minute lifecycle counts as one hour and a 65-minute lifecycle counts
+as two. Reusing a parked Linode does not create another lifecycle or round the
+same paid time again. A lifecycle crossing a month boundary has its overlap
+rounded independently in each month, so 30 minutes before the boundary and 20
+minutes afterward count as one hour in each month.
 
-For example, a two-hour starting bank gives six hours of capacity. Using three
-hours leaves a three-hour bank for the next day, using five hours leaves a
-one-hour bank, and using seven hours creates one hour of debt. That debt reduces
-the next day's capacity to three hours.
+The controller refuses another high-memory `up` or `run`, including parked
+reactivation, once billed usage reaches 100 hours. A start is allowed while
+usage is below the limit, and an existing Linode is not stopped merely because
+it later crosses the threshold. There is no banking and no debt: unused time
+and overrun are both discarded at the next monthly boundary. Normal-profile
+starts are not restricted by high-memory usage.
 
-An accounting day is midnight-to-midnight at fixed UTC-05:00 ("fixed EST").
-Daylight-saving time is never applied. The controller obtains current time
-from the Linode API's HTTPS `Date` header and records Linode-provided
-creation-to-deletion intervals, rather than trusting the Windows clock.
-`check --high-memory` reports the base allowance, bank and debt at day start,
-adjusted capacity, actual and remaining time, projected balance at the next
-boundary, and projected eligibility when blocked. It returns nonzero when a new
-high-memory start would be blocked.
+An accounting month begins at midnight on its first day at fixed UTC-05:00
+("fixed EST"); daylight-saving time is never applied. The controller obtains
+current time from the Linode API's HTTPS `Date` header and records
+Linode-provided creation-to-deletion intervals rather than trusting the Windows
+clock. `check --high-memory` reports the exact elapsed lifetime, rounded billed
+usage, remaining allowance, and next monthly boundary. It returns nonzero when
+a new high-memory start would be blocked.
 
 `allowance` is the read-only automation interface for the same trusted
-accounting state. It emits JSON with exact UTC boundaries and integer-second
-balances, capacity, usage, remaining time, and active managed high-memory count.
-Pass `--required-seconds N` to project the earliest boundary with at least that
-much capacity if no additional usage accrues; the record explicitly labels this
-assumption. Guarded controllers must still recheck the live allowance immediately
-before acquisition.
+accounting state. Schema version 2 emits exact UTC month boundaries, elapsed and
+whole-hour-billed usage, remaining time, and the active managed high-memory
+count. Pass `--required-seconds N` to round a requested slice up to whole billed
+hours and check that the full slice fits. When it does not fit, the next monthly
+boundary is informational only: the controller does not wait, schedule, or
+retry automatically. Re-run the command manually after the reset. Guarded
+controllers must still recheck the live allowance immediately before acquisition.
 
 This worker is the project's sole Rust/C execution environment. Do not run
 Cargo, `rustc`, Rust project binaries, the C build, C binaries, WSL, Valgrind,
@@ -237,7 +233,7 @@ guarded $0.74-an-hour profile:
 .\linode-runner.ps1 run --high-memory
 ```
 
-The same bank-adjusted fixed-EST start guard applies to both the automated
+The same 100-hour monthly whole-hour-billed guard applies to both the automated
 `run` command and the interactive `up` command. The advanced `--type` option
 remains available for compatibility, but only the two documented types are
 accepted; `--type g7-highmem-8` cannot bypass the high-memory guard.
@@ -500,7 +496,7 @@ Python tests may run locally:
 ```
 
 The tests pin both supported Linode profiles, CLI selection, trusted API time,
-fixed-EST high-memory bank/debt accounting and blocking, firewall settings,
+fixed-EST monthly high-memory billing-rounding and blocking, firewall settings,
 hour-bucket deletion deadlines, exact configuration reuse, local lifecycle
 locking, restricted IAM entity access, lease-checked local and remote reapers,
 cloud-init/package-maintenance ordering and fail-closed records, remote-only

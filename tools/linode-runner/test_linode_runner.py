@@ -1083,7 +1083,7 @@ class TrustedTimeTests(unittest.TestCase):
 
 
 class HighMemoryUsageTests(unittest.TestCase):
-    NOW = datetime(2026, 7, 27, 15, tzinfo=timezone.utc)
+    NOW = datetime(2026, 8, 15, 15, tzinfo=timezone.utc)
 
     @staticmethod
     def write_run(
@@ -1103,39 +1103,257 @@ class HighMemoryUsageTests(unittest.TestCase):
             },
         )
 
-    def usage(self, history: Path, current: Path | None = None, active=()):
+    def usage(
+        self,
+        history: Path,
+        current: Path | None = None,
+        active=(),
+        *,
+        now: datetime | None = None,
+        parked: Path | None = None,
+    ):
         return runner.high_memory_usage(
-            self.NOW,
+            self.NOW if now is None else now,
             history_root=history,
             current_state_path=current or history.parent / "current.json",
-            parked_root=history.parent / "parked",
+            parked_root=parked or history.parent / "parked",
             active_linodes=active,
         )
 
-    def test_summer_accounting_day_still_starts_at_0500_utc(self):
-        day_start, next_reset = runner.fixed_est_day_bounds(self.NOW)
+    def test_summer_accounting_month_starts_at_0500_utc(self):
+        month_start, next_month_start = runner.fixed_est_month_bounds(self.NOW)
         self.assertEqual(
-            day_start,
-            datetime(2026, 7, 27, 5, tzinfo=timezone.utc),
+            month_start,
+            datetime(2026, 8, 1, 5, tzinfo=timezone.utc),
         )
         self.assertEqual(
-            next_reset,
-            datetime(2026, 7, 28, 5, tzinfo=timezone.utc),
+            next_month_start,
+            datetime(2026, 9, 1, 5, tzinfo=timezone.utc),
         )
 
-    def test_no_history_starts_with_full_bank(self):
+    def test_december_accounting_month_rolls_into_next_year(self):
+        month_start, next_month_start = runner.fixed_est_month_bounds(
+            datetime(2026, 12, 31, 23, tzinfo=timezone.utc)
+        )
+        self.assertEqual(
+            month_start,
+            datetime(2026, 12, 1, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            next_month_start,
+            datetime(2027, 1, 1, 5, tzinfo=timezone.utc),
+        )
+
+    def test_rounding_matches_whole_hour_linode_billing(self):
+        self.assertEqual(
+            runner.rounded_billing_duration(timedelta(minutes=1)),
+            timedelta(hours=1),
+        )
+        self.assertEqual(
+            runner.rounded_billing_duration(timedelta(minutes=55)),
+            timedelta(hours=1),
+        )
+        self.assertEqual(
+            runner.rounded_billing_duration(timedelta(hours=1)),
+            timedelta(hours=1),
+        )
+        self.assertEqual(
+            runner.rounded_billing_duration(timedelta(minutes=65)),
+            timedelta(hours=2),
+        )
+
+    def test_cross_month_overlap_is_rounded_independently(self):
+        started = datetime(2026, 9, 1, 4, 30, tzinfo=timezone.utc)
+        ended = datetime(2026, 9, 1, 5, 20, tzinfo=timezone.utc)
+        august = runner.billed_month_overlap(
+            started,
+            ended,
+            datetime(2026, 8, 1, 5, tzinfo=timezone.utc),
+            datetime(2026, 9, 1, 5, tzinfo=timezone.utc),
+        )
+        september = runner.billed_month_overlap(
+            started,
+            ended,
+            datetime(2026, 9, 1, 5, tzinfo=timezone.utc),
+            datetime(2026, 10, 1, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(august, (timedelta(minutes=30), timedelta(hours=1)))
+        self.assertEqual(september, (timedelta(minutes=20), timedelta(hours=1)))
+
+    def test_interval_ending_at_boundary_does_not_enter_next_month(self):
+        elapsed, billed = runner.billed_month_overlap(
+            datetime(2026, 8, 31, 4, tzinfo=timezone.utc),
+            datetime(2026, 9, 1, 5, tzinfo=timezone.utc),
+            datetime(2026, 9, 1, 5, tzinfo=timezone.utc),
+            datetime(2026, 10, 1, 5, tzinfo=timezone.utc),
+        )
+        self.assertEqual(elapsed, timedelta())
+        self.assertEqual(billed, timedelta())
+
+    def test_no_history_starts_with_full_monthly_allowance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            usage = self.usage(Path(temporary) / "runs")
+        self.assertEqual(usage.elapsed, timedelta())
+        self.assertEqual(usage.billed, timedelta())
+        self.assertEqual(usage.remaining, timedelta(hours=100))
+        self.assertFalse(usage.exhausted)
+
+    def test_distinct_lifecycles_are_rounded_separately(self):
         with tempfile.TemporaryDirectory() as temporary:
             history = Path(temporary) / "runs"
+            self.write_run(
+                history,
+                "fifty-five-minutes",
+                1,
+                "2026-08-02T06:00:00+00:00",
+                "2026-08-02T06:55:00+00:00",
+            )
+            self.write_run(
+                history,
+                "sixty-five-minutes",
+                2,
+                "2026-08-03T06:00:00+00:00",
+                "2026-08-03T07:05:00+00:00",
+            )
             usage = self.usage(history)
-            self.assertEqual(usage.actual, timedelta())
-            self.assertEqual(usage.balance_at_start, timedelta(hours=4))
-            self.assertEqual(usage.banked_at_start, timedelta(hours=4))
-            self.assertEqual(usage.debt_at_start, timedelta())
-            self.assertEqual(usage.capacity, timedelta(hours=8))
-            self.assertEqual(usage.remaining, timedelta(hours=8))
-            self.assertEqual(usage.next_balance, timedelta(hours=4))
+        self.assertEqual(usage.elapsed, timedelta(hours=2))
+        self.assertEqual(usage.billed, timedelta(hours=3))
+        self.assertEqual(usage.remaining, timedelta(hours=97))
 
-    def test_machine_allowance_record_exposes_exact_boundaries(self):
+    def test_reused_run_commands_do_not_round_one_lifecycle_again(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            history = Path(temporary) / "runs"
+            path = history / "reused.json"
+            write_json(
+                path,
+                {
+                    "type": runner.HIGH_MEMORY_TYPE,
+                    "linode_id": 7,
+                    "linode_created_at": "2026-08-02T06:00:00+00:00",
+                    "linode_deleted_at": "2026-08-02T06:55:00+00:00",
+                    "reuse_count": 4,
+                },
+            )
+            usage = self.usage(history)
+        self.assertEqual(usage.elapsed, timedelta(minutes=55))
+        self.assertEqual(usage.billed, timedelta(hours=1))
+
+    def test_duplicate_linode_sources_are_rounded_once(self):
+        now = datetime(2026, 8, 2, 7, 5, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temporary:
+            history = Path(temporary) / "runs"
+            self.write_run(
+                history,
+                "archived-copy",
+                7,
+                "2026-08-02T06:00:00+00:00",
+                "2026-08-02T06:55:00+00:00",
+            )
+            usage = self.usage(
+                history,
+                active=[
+                    {
+                        "id": 7,
+                        "label": "e-rust-codex-260802-a1b2c3",
+                        "type": runner.HIGH_MEMORY_TYPE,
+                        "created": "2026-08-02T06:00:00+00:00",
+                    }
+                ],
+                now=now,
+            )
+        self.assertEqual(usage.elapsed, timedelta(minutes=65))
+        self.assertEqual(usage.billed, timedelta(hours=2))
+
+    def test_only_current_month_high_memory_overlap_is_counted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            history = Path(temporary) / "runs"
+            self.write_run(
+                history,
+                "cross-month",
+                1,
+                "2026-08-01T04:30:00+00:00",
+                "2026-08-01T05:30:00+00:00",
+            )
+            self.write_run(
+                history,
+                "prior-month",
+                2,
+                "2026-07-20T03:00:00+00:00",
+                "2026-07-20T05:00:00+00:00",
+            )
+            write_json(
+                history / "normal.json",
+                {
+                    "type": runner.DEFAULT_TYPE,
+                    "linode_id": 3,
+                    "created_at": "broken but irrelevant",
+                    "deleted_at": "also irrelevant",
+                },
+            )
+            usage = self.usage(history)
+        self.assertEqual(usage.elapsed, timedelta(minutes=30))
+        self.assertEqual(usage.billed, timedelta(hours=1))
+        self.assertEqual(usage.remaining, timedelta(hours=99))
+
+    def test_ninety_nine_billed_hours_allows_new_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            history = Path(temporary) / "runs"
+            self.write_run(
+                history,
+                "ninety-nine-billed",
+                1,
+                "2026-08-02T05:00:00+00:00",
+                "2026-08-06T07:01:00+00:00",
+            )
+            usage = self.usage(history)
+        self.assertEqual(usage.elapsed, timedelta(hours=98, minutes=1))
+        self.assertEqual(usage.billed, timedelta(hours=99))
+        self.assertEqual(usage.remaining, timedelta(hours=1))
+        self.assertFalse(usage.exhausted)
+        runner.require_high_memory_allowance(usage)
+
+    def test_one_hundred_billed_hours_blocks_new_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            history = Path(temporary) / "runs"
+            self.write_run(
+                history,
+                "one-hundred-billed",
+                1,
+                "2026-08-02T05:00:00+00:00",
+                "2026-08-06T08:01:00+00:00",
+            )
+            usage = self.usage(history)
+        self.assertEqual(usage.elapsed, timedelta(hours=99, minutes=1))
+        self.assertEqual(usage.billed, timedelta(hours=100))
+        self.assertEqual(usage.remaining, timedelta())
+        self.assertTrue(usage.exhausted)
+        with self.assertRaisesRegex(
+            runner.RunnerError,
+            "allowance of 100:00:00",
+        ):
+            runner.require_high_memory_allowance(usage)
+
+    def test_overrun_does_not_reduce_next_month_allowance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            history = Path(temporary) / "runs"
+            self.write_run(
+                history,
+                "august-overrun",
+                1,
+                "2026-08-02T05:00:00+00:00",
+                "2026-08-06T09:01:00+00:00",
+            )
+            august = self.usage(history)
+            september = self.usage(
+                history,
+                now=datetime(2026, 9, 15, 15, tzinfo=timezone.utc),
+            )
+        self.assertEqual(august.billed, timedelta(hours=101))
+        self.assertEqual(august.remaining, timedelta())
+        self.assertEqual(september.billed, timedelta())
+        self.assertEqual(september.remaining, timedelta(hours=100))
+
+    def test_machine_allowance_record_has_exact_schema_v2_surface(self):
         with tempfile.TemporaryDirectory() as temporary:
             usage = self.usage(Path(temporary) / "runs")
             value = runner.high_memory_usage_record(
@@ -1144,43 +1362,87 @@ class HighMemoryUsageTests(unittest.TestCase):
                 active_managed_high_memory=0,
             )
         self.assertEqual(
+            set(value),
+            {
+                "schema_version",
+                "kind",
+                "accounting_timezone",
+                "observed_at_utc",
+                "month_start_utc",
+                "next_month_start_utc",
+                "earliest_new_start_utc",
+                "new_starts_allowed",
+                "active_managed_high_memory",
+                "monthly_limit_seconds",
+                "elapsed_seconds",
+                "billed_usage_seconds",
+                "remaining_seconds",
+            },
+        )
+        self.assertEqual(value["schema_version"], 2)
+        self.assertEqual(
             value["kind"], "umlaut-linode-high-memory-allowance"
         )
-        self.assertEqual(value["observed_at_utc"], "2026-07-27T15:00:00+00:00")
-        self.assertEqual(value["next_boundary_utc"], "2026-07-28T05:00:00+00:00")
+        self.assertEqual(value["month_start_utc"], "2026-08-01T05:00:00+00:00")
         self.assertEqual(
-            value["earliest_new_start_utc"], "2026-07-27T15:00:00+00:00"
+            value["next_month_start_utc"], "2026-09-01T05:00:00+00:00"
         )
-        self.assertTrue(value["new_starts_allowed"])
-        self.assertEqual(value["capacity_seconds"], 8 * 60 * 60)
-        self.assertEqual(value["remaining_seconds"], 8 * 60 * 60)
-        self.assertEqual(
-            value["projected_capacity_at_next_boundary_seconds"],
-            8 * 60 * 60,
-        )
+        self.assertEqual(value["monthly_limit_seconds"], 100 * 60 * 60)
+        self.assertEqual(value["remaining_seconds"], 100 * 60 * 60)
 
-    def test_machine_allowance_projects_required_slice_boundary(self):
+    def test_required_slice_is_rounded_and_projects_manual_monthly_retry(self):
         usage = runner.HighMemoryUsage(
-            actual=timedelta(seconds=27_551),
-            balance_at_start=timedelta(hours=4),
-            day_start=datetime(2026, 8, 1, 5, tzinfo=timezone.utc),
-            next_boundary=datetime(2026, 8, 2, 5, tzinfo=timezone.utc),
+            elapsed=timedelta(hours=96),
+            billed=timedelta(hours=96),
+            month_start=datetime(2026, 8, 1, 5, tzinfo=timezone.utc),
+            next_month_start=datetime(2026, 9, 1, 5, tzinfo=timezone.utc),
         )
+        observed = datetime(2026, 8, 15, 15, tzinfo=timezone.utc)
         value = runner.high_memory_usage_record(
             usage,
-            observed_at=datetime(2026, 8, 2, 2, tzinfo=timezone.utc),
+            observed_at=observed,
             active_managed_high_memory=0,
             required_seconds=14_700,
         )
-        self.assertEqual(value["remaining_seconds"], 1_249)
-        self.assertEqual(
-            value["projected_capacity_at_next_boundary_seconds"], 15_649
-        )
+        self.assertEqual(value["required_billed_seconds"], 5 * 60 * 60)
         self.assertFalse(value["required_start_available_now"])
         self.assertEqual(
             value["projected_earliest_required_start_utc"],
-            "2026-08-02T05:00:00+00:00",
+            "2026-09-01T05:00:00+00:00",
         )
+        self.assertIn(
+            "does not wait, schedule, or retry",
+            value["required_start_projection_warning"],
+        )
+
+        fitting = runner.high_memory_usage_record(
+            usage,
+            observed_at=observed,
+            active_managed_high_memory=0,
+            required_seconds=14_400,
+        )
+        self.assertTrue(fitting["required_start_available_now"])
+        self.assertEqual(
+            fitting["projected_earliest_required_start_utc"],
+            "2026-08-15T15:00:00+00:00",
+        )
+
+    def test_required_slice_over_monthly_limit_has_no_projection(self):
+        usage = runner.HighMemoryUsage(
+            elapsed=timedelta(),
+            billed=timedelta(),
+            month_start=datetime(2026, 8, 1, 5, tzinfo=timezone.utc),
+            next_month_start=datetime(2026, 9, 1, 5, tzinfo=timezone.utc),
+        )
+        value = runner.high_memory_usage_record(
+            usage,
+            observed_at=self.NOW,
+            active_managed_high_memory=0,
+            required_seconds=100 * 60 * 60 + 1,
+        )
+        self.assertEqual(value["required_billed_seconds"], 101 * 60 * 60)
+        self.assertFalse(value["required_start_available_now"])
+        self.assertIsNone(value["projected_earliest_required_start_utc"])
 
     def test_allowance_command_emits_read_only_json(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1198,284 +1460,31 @@ class HighMemoryUsageTests(unittest.TestCase):
                 )
             value = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
-        self.assertEqual(value["actual_seconds"], 0)
+        self.assertEqual(value["schema_version"], 2)
+        self.assertEqual(value["elapsed_seconds"], 0)
+        self.assertEqual(value["billed_usage_seconds"], 0)
+        self.assertEqual(value["required_billed_seconds"], 5 * 60 * 60)
         self.assertEqual(value["active_managed_high_memory"], 0)
         self.assertTrue(value["required_start_available_now"])
         self.assertEqual(api.posts, [])
 
-    def test_usage_counts_only_current_day_high_memory_overlap(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "cross-midnight",
-                1,
-                "2026-07-27T04:30:00+00:00",
-                "2026-07-27T05:30:00+00:00",
-            )
-            self.write_run(
-                history,
-                "prior-day",
-                2,
-                "2026-07-27T03:00:00+00:00",
-                "2026-07-27T05:00:00+00:00",
-            )
-            write_json(
-                history / "normal.json",
-                {
-                    "type": runner.DEFAULT_TYPE,
-                    "linode_id": 3,
-                    "created_at": "broken but irrelevant",
-                    "deleted_at": "also irrelevant",
-                },
-            )
-            usage = self.usage(history)
-            self.assertEqual(usage.actual, timedelta(minutes=30))
-            self.assertEqual(usage.banked_at_start, timedelta(hours=4))
-            self.assertEqual(usage.capacity, timedelta(hours=8))
-            self.assertEqual(
-                usage.remaining,
-                timedelta(hours=7, minutes=30),
-            )
-            self.assertEqual(usage.next_balance, timedelta(hours=4))
-            self.assertFalse(usage.exhausted)
+    def test_usage_report_has_monthly_elapsed_and_billed_values(self):
+        usage = runner.HighMemoryUsage(
+            elapsed=timedelta(minutes=55),
+            billed=timedelta(hours=1),
+            month_start=datetime(2026, 8, 1, 5, tzinfo=timezone.utc),
+            next_month_start=datetime(2026, 9, 1, 5, tzinfo=timezone.utc),
+        )
+        with mock.patch("sys.stdout", new_callable=StringIO) as stdout:
+            runner.report_high_memory_usage(usage)
+        output = stdout.getvalue().lower()
+        self.assertIn("monthly allowance: 100:00:00", output)
+        self.assertIn("exact linode lifetime this month: 00:55:00", output)
+        self.assertIn("whole-hour billed usage this month: 01:00:00", output)
+        self.assertNotIn("bank", output)
+        self.assertNotIn("debt", output)
 
-    def test_usage_immediately_below_capacity_allows_new_start(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "below-capacity",
-                1,
-                "2026-07-27T06:00:00+00:00",
-                "2026-07-27T13:59:59+00:00",
-            )
-            usage = self.usage(history)
-            self.assertEqual(
-                usage.actual,
-                timedelta(hours=7, minutes=59, seconds=59),
-            )
-            self.assertEqual(usage.capacity, timedelta(hours=8))
-            self.assertEqual(usage.remaining, timedelta(seconds=1))
-            self.assertFalse(usage.exhausted)
-            runner.require_high_memory_allowance(usage)
-
-    def test_exactly_full_bank_capacity_blocks_new_start(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "eight-hours",
-                1,
-                "2026-07-27T06:00:00+00:00",
-                "2026-07-27T14:00:00+00:00",
-            )
-            usage = self.usage(history)
-            self.assertEqual(usage.actual, timedelta(hours=8))
-            self.assertEqual(usage.capacity, timedelta(hours=8))
-            self.assertEqual(usage.next_balance, timedelta())
-            self.assertTrue(usage.exhausted)
-            with self.assertRaisesRegex(
-                runner.RunnerError,
-                "bank-adjusted capacity of 08:00:00",
-            ):
-                runner.require_high_memory_allowance(usage)
-
-    def test_partial_daily_usage_accrues_into_existing_bank(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "prior-six-hours",
-                1,
-                "2026-07-26T06:00:00+00:00",
-                "2026-07-26T12:00:00+00:00",
-            )
-            self.write_run(
-                history,
-                "current-three-hours",
-                2,
-                "2026-07-27T06:00:00+00:00",
-                "2026-07-27T09:00:00+00:00",
-            )
-            usage = self.usage(history)
-            self.assertEqual(usage.banked_at_start, timedelta(hours=2))
-            self.assertEqual(usage.capacity, timedelta(hours=6))
-            self.assertEqual(usage.actual, timedelta(hours=3))
-            self.assertEqual(usage.remaining, timedelta(hours=3))
-            self.assertEqual(usage.next_balance, timedelta(hours=3))
-
-    def test_unused_day_fills_partial_bank_to_cap(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "prior-six-hours",
-                1,
-                "2026-07-26T06:00:00+00:00",
-                "2026-07-26T12:00:00+00:00",
-            )
-            usage = self.usage(history)
-            self.assertEqual(usage.banked_at_start, timedelta(hours=2))
-            self.assertEqual(usage.actual, timedelta())
-            self.assertEqual(usage.next_balance, timedelta(hours=4))
-
-    def test_usage_above_daily_base_consumes_bank(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "prior-six-hours",
-                1,
-                "2026-07-26T06:00:00+00:00",
-                "2026-07-26T12:00:00+00:00",
-            )
-            self.write_run(
-                history,
-                "current-five-hours",
-                2,
-                "2026-07-27T06:00:00+00:00",
-                "2026-07-27T11:00:00+00:00",
-            )
-            usage = self.usage(history)
-            self.assertEqual(usage.banked_at_start, timedelta(hours=2))
-            self.assertEqual(usage.actual, timedelta(hours=5))
-            self.assertEqual(usage.next_balance, timedelta(hours=1))
-
-    def test_overshoot_beyond_bank_becomes_debt(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "prior-six-hours",
-                1,
-                "2026-07-26T06:00:00+00:00",
-                "2026-07-26T12:00:00+00:00",
-            )
-            self.write_run(
-                history,
-                "current-seven-hours",
-                2,
-                "2026-07-27T06:00:00+00:00",
-                "2026-07-27T13:00:00+00:00",
-            )
-            usage = self.usage(history)
-            self.assertEqual(usage.capacity, timedelta(hours=6))
-            self.assertEqual(usage.actual, timedelta(hours=7))
-            self.assertEqual(usage.next_balance, -timedelta(hours=1))
-            self.assertEqual(
-                usage.debt_at_next_boundary,
-                timedelta(hours=1),
-            )
-            self.assertTrue(usage.exhausted)
-
-    def test_carried_debt_reduces_next_days_capacity(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "prior-nine-hours",
-                1,
-                "2026-07-26T06:00:00+00:00",
-                "2026-07-26T15:00:00+00:00",
-            )
-            usage = self.usage(history)
-            self.assertEqual(usage.balance_at_start, -timedelta(hours=1))
-            self.assertEqual(usage.banked_at_start, timedelta())
-            self.assertEqual(usage.debt_at_start, timedelta(hours=1))
-            self.assertEqual(usage.capacity, timedelta(hours=3))
-            self.assertEqual(usage.remaining, timedelta(hours=3))
-            self.assertEqual(usage.next_balance, timedelta(hours=3))
-
-    def test_usage_report_shows_debt_and_projected_repayment(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "prior-nine-hours",
-                1,
-                "2026-07-26T06:00:00+00:00",
-                "2026-07-26T15:00:00+00:00",
-            )
-            usage = self.usage(history)
-            with mock.patch("sys.stdout", new_callable=StringIO) as stdout:
-                runner.report_high_memory_usage(usage)
-            output = stdout.getvalue()
-            self.assertIn("Banked usage at start of day: 00:00:00", output)
-            self.assertIn("Usage debt at start of day: 01:00:00", output)
-            self.assertIn("Adjusted daily capacity: 03:00:00", output)
-            self.assertIn(
-                "Projected bank at next boundary if no further usage accrues: "
-                "03:00:00",
-                output,
-            )
-            self.assertIn(
-                "Projected debt at next boundary if no further usage accrues: "
-                "00:00:00",
-                output,
-            )
-
-    def test_debt_can_eliminate_daily_capacity(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "prior-twelve-hours",
-                1,
-                "2026-07-26T06:00:00+00:00",
-                "2026-07-26T18:00:00+00:00",
-            )
-            usage = self.usage(history)
-            self.assertEqual(usage.balance_at_start, -timedelta(hours=4))
-            self.assertEqual(usage.capacity, timedelta())
-            self.assertEqual(usage.remaining, timedelta())
-            self.assertTrue(usage.exhausted)
-            self.assertEqual(usage.next_balance, timedelta())
-            self.assertEqual(
-                usage.projected_eligible_at,
-                datetime(2026, 7, 28, 5, tzinfo=timezone.utc),
-            )
-
-    def test_large_debt_delays_projected_eligibility_across_empty_days(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "prior-seventeen-hours",
-                1,
-                "2026-07-26T06:00:00+00:00",
-                "2026-07-26T23:00:00+00:00",
-            )
-            usage = self.usage(history)
-            self.assertEqual(usage.balance_at_start, -timedelta(hours=9))
-            self.assertEqual(usage.capacity, timedelta())
-            self.assertEqual(usage.next_balance, -timedelta(hours=5))
-            self.assertEqual(
-                usage.projected_eligible_at,
-                datetime(2026, 7, 29, 5, tzinfo=timezone.utc),
-            )
-
-    def test_empty_days_repay_debt_then_fill_bank(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            history = Path(temporary) / "runs"
-            self.write_run(
-                history,
-                "twelve-hours",
-                1,
-                "2026-07-26T06:00:00+00:00",
-                "2026-07-26T18:00:00+00:00",
-            )
-            usage = runner.high_memory_usage(
-                datetime(2026, 7, 29, 15, tzinfo=timezone.utc),
-                history_root=history,
-                current_state_path=Path(temporary) / "current.json",
-            )
-            self.assertEqual(usage.balance_at_start, timedelta(hours=4))
-            self.assertEqual(usage.banked_at_start, timedelta(hours=4))
-            self.assertEqual(usage.debt_at_start, timedelta())
-            self.assertEqual(usage.capacity, timedelta(hours=8))
-
-    def test_live_managed_high_memory_is_counted(self):
+    def test_live_managed_high_memory_is_counted_and_rounded(self):
         with tempfile.TemporaryDirectory() as temporary:
             history = Path(temporary) / "runs"
             usage = self.usage(
@@ -1483,15 +1492,14 @@ class HighMemoryUsageTests(unittest.TestCase):
                 active=[
                     {
                         "id": 7,
-                        "label": "e-rust-codex-260727-a1b2c3",
+                        "label": "e-rust-codex-260815-a1b2c3",
                         "type": runner.HIGH_MEMORY_TYPE,
-                        "created": "2026-07-27T14:00:00",
+                        "created": "2026-08-15T14:05:00+00:00",
                     }
                 ],
             )
-            self.assertEqual(usage.actual, timedelta(hours=1))
-            self.assertEqual(usage.banked_at_start, timedelta(hours=4))
-            self.assertEqual(usage.capacity, timedelta(hours=8))
+        self.assertEqual(usage.elapsed, timedelta(minutes=55))
+        self.assertEqual(usage.billed, timedelta(hours=1))
 
     def test_parked_high_memory_state_remains_billable_usage(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1502,17 +1510,13 @@ class HighMemoryUsageTests(unittest.TestCase):
                 {
                     "type": runner.HIGH_MEMORY_TYPE,
                     "linode_id": 7,
-                    "linode_created_at": "2026-07-27T14:00:00+00:00",
+                    "linode_created_at": "2026-08-15T14:05:00+00:00",
                     "lifecycle": "parked",
                 },
             )
-            usage = runner.high_memory_usage(
-                self.NOW,
-                history_root=root / "runs",
-                current_state_path=root / "current.json",
-                parked_root=parked,
-            )
-            self.assertEqual(usage.actual, timedelta(hours=1))
+            usage = self.usage(root / "runs", parked=parked)
+        self.assertEqual(usage.elapsed, timedelta(minutes=55))
+        self.assertEqual(usage.billed, timedelta(hours=1))
 
     def test_malformed_history_fails_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1524,14 +1528,13 @@ class HighMemoryUsageTests(unittest.TestCase):
                 "Could not verify high-memory usage",
             ):
                 self.usage(history)
-
-
 class ProvisionGuardTests(unittest.TestCase):
     def provision_patches(self, temporary: str):
         root = Path(temporary)
         return (
             mock.patch.object(runner, "RUN_HISTORY", root / "runs"),
             mock.patch.object(runner, "CURRENT_STATE", root / "current.json"),
+            mock.patch.object(runner, "PARKED_ROOT", root / "parked"),
             mock.patch.object(runner, "command_path", return_value="tool"),
             mock.patch.object(runner, "ensure_ssh_key"),
             mock.patch.object(runner, "read_public_key", return_value="ssh-ed25519 test"),
@@ -1548,20 +1551,20 @@ class ProvisionGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             write_json(
-                root / "runs" / "eight-hours.json",
+                root / "runs" / "one-hundred-hours.json",
                 {
                     "type": runner.HIGH_MEMORY_TYPE,
                     "linode_id": 1,
-                    "linode_created_at": "2026-07-27T06:00:00+00:00",
-                    "linode_deleted_at": "2026-07-27T14:00:00+00:00",
+                    "linode_created_at": "2026-07-20T06:00:00+00:00",
+                    "linode_deleted_at": "2026-07-24T10:00:00+00:00",
                 },
             )
             api = ProvisionApi()
             patches = self.provision_patches(temporary)
-            with patches[0], patches[1]:
+            with patches[0], patches[1], patches[2]:
                 with self.assertRaisesRegex(
                     runner.RunnerError,
-                    "bank-adjusted capacity of 08:00:00",
+                    "allowance of 100:00:00",
                 ):
                     runner.provision(
                         api,
@@ -1570,16 +1573,48 @@ class ProvisionGuardTests(unittest.TestCase):
                     )
             self.assertEqual(api.posts, [])
 
-    def test_high_memory_check_reports_bank_and_returns_nonzero_at_capacity(self):
+    def test_exhausted_guard_precedes_parked_runner_activation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             write_json(
-                root / "runs" / "eight-hours.json",
+                root / "runs" / "one-hundred-hours.json",
                 {
                     "type": runner.HIGH_MEMORY_TYPE,
                     "linode_id": 1,
-                    "linode_created_at": "2026-07-27T06:00:00+00:00",
-                    "linode_deleted_at": "2026-07-27T14:00:00+00:00",
+                    "linode_created_at": "2026-07-20T06:00:00+00:00",
+                    "linode_deleted_at": "2026-07-24T10:00:00+00:00",
+                },
+            )
+            api = ProvisionApi()
+            patches = self.provision_patches(temporary)
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                mock.patch.object(runner, "validate_catalog"),
+                mock.patch.object(runner, "activate_parked_runner") as activate,
+            ):
+                with self.assertRaisesRegex(
+                    runner.RunnerError,
+                    "allowance of 100:00:00",
+                ):
+                    runner.acquire_runner(
+                        api,
+                        linode_type=runner.HIGH_MEMORY_TYPE,
+                    )
+            activate.assert_not_called()
+            self.assertEqual(api.posts, [])
+
+    def test_high_memory_check_reports_monthly_usage_at_capacity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_json(
+                root / "runs" / "one-hundred-hours.json",
+                {
+                    "type": runner.HIGH_MEMORY_TYPE,
+                    "linode_id": 1,
+                    "linode_created_at": "2026-07-20T06:00:00+00:00",
+                    "linode_deleted_at": "2026-07-24T10:00:00+00:00",
                 },
             )
             api = ProvisionApi()
@@ -1589,6 +1624,7 @@ class ProvisionGuardTests(unittest.TestCase):
                 patches[1],
                 patches[2],
                 patches[3],
+                patches[4],
                 mock.patch.object(runner, "LinodeApi", return_value=api),
                 mock.patch("sys.stderr"),
                 mock.patch("sys.stdout", new_callable=StringIO) as stdout,
@@ -1602,26 +1638,25 @@ class ProvisionGuardTests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(exit_code, 1)
-            output = stdout.getvalue()
-            self.assertIn("Daily base allowance: 04:00:00", output)
-            self.assertIn("Banked usage at start of day: 04:00:00", output)
-            self.assertIn("Usage debt at start of day: 00:00:00", output)
-            self.assertIn("Adjusted daily capacity: 08:00:00", output)
-            self.assertIn("Actual Linode lifetime today: 08:00:00", output)
-            self.assertIn("Projected bank at next boundary", output)
-            self.assertIn("Projected debt at next boundary", output)
+            output = stdout.getvalue().lower()
+            self.assertIn("monthly allowance: 100:00:00", output)
+            self.assertIn("exact linode lifetime this month: 100:00:00", output)
+            self.assertIn("whole-hour billed usage this month: 100:00:00", output)
+            self.assertIn("remaining before new starts are blocked: 00:00:00", output)
+            self.assertNotIn("bank", output)
+            self.assertNotIn("debt", output)
             self.assertEqual(api.posts, [])
 
     def test_high_memory_history_does_not_block_normal_profile(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             write_json(
-                root / "runs" / "eight-hours.json",
+                root / "runs" / "one-hundred-hours.json",
                 {
                     "type": runner.HIGH_MEMORY_TYPE,
                     "linode_id": 1,
-                    "linode_created_at": "2026-07-27T06:00:00+00:00",
-                    "linode_deleted_at": "2026-07-27T14:00:00+00:00",
+                    "linode_created_at": "2026-07-20T06:00:00+00:00",
+                    "linode_deleted_at": "2026-07-24T10:00:00+00:00",
                 },
             )
             api = ProvisionApi()
@@ -1632,9 +1667,10 @@ class ProvisionGuardTests(unittest.TestCase):
                 patches[2],
                 patches[3],
                 patches[4],
-                patches[5] as wait_for_linode,
-                patches[6],
+                patches[5],
+                patches[6] as wait_for_linode,
                 patches[7],
+                patches[8],
             ):
                 wait_for_linode.return_value = {
                     "id": 7,
@@ -1664,9 +1700,10 @@ class ProvisionGuardTests(unittest.TestCase):
                 patches[2],
                 patches[3],
                 patches[4],
-                patches[5] as wait_for_linode,
-                patches[6],
+                patches[5],
+                patches[6] as wait_for_linode,
                 patches[7],
+                patches[8],
             ):
                 wait_for_linode.return_value = {
                     "id": 7,
@@ -2093,17 +2130,17 @@ class DocumentationTests(unittest.TestCase):
             self.assertIn("--high-memory", document)
             self.assertIn("CASC", document)
             self.assertIn("--memory-limit=131072", document)
-            self.assertIn("bank", document.lower())
-            self.assertIn("debt", document.lower())
+            self.assertIn("100-hour", document.lower())
+            self.assertIn("whole hour", document.lower())
+            self.assertIn("no banking", document.lower())
+            self.assertIn("no debt", document.lower())
         self.assertIn("fixed UTC-05:00", runbook)
         self.assertIn(
-            "daily capacity = max(0, 4 hours + starting balance)",
+            "billed usage = ceil(current-month overlap / 1 hour) * 1 hour",
             runbook,
         )
-        self.assertIn(
-            "next balance = min(4 hours, starting balance + 4 hours - actual usage)",
-            runbook,
-        )
+        self.assertNotIn("daily capacity =", runbook)
+        self.assertNotIn("next balance =", runbook)
         self.assertIn("cloud-init", runbook)
         self.assertIn("apt-daily-upgrade.timer", runbook)
         self.assertIn("package-maintenance-lifecycle.json", runbook)

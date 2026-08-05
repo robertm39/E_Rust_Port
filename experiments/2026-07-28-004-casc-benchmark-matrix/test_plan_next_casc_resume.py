@@ -51,6 +51,12 @@ class ResumeControllerSourceTests(unittest.TestCase):
         self.assertNotIn("grep -Fq", preflight)
         self.assertIn("summary contract mismatch", preflight)
 
+    def test_live_allowance_check_requires_schema_v2_billed_duration(self) -> None:
+        source = CONTROLLER.read_text(encoding="utf-8")
+
+        self.assertIn("$allowance.schema_version -ne 2", source)
+        self.assertIn("$allowance.required_billed_seconds", source)
+
 
 class ResumePlanningTests(unittest.TestCase):
     CHECKPOINT = Path("checkpoint.tar.gz")
@@ -74,16 +80,18 @@ class ResumePlanningTests(unittest.TestCase):
     @staticmethod
     def allowance(*, available: bool) -> dict:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "kind": "umlaut-linode-high-memory-allowance",
             "required_seconds": 14700,
+            "required_billed_seconds": 18000,
             "active_managed_high_memory": 0,
             "observed_at_utc": "2026-08-02T02:00:00+00:00",
             "required_start_available_now": available,
+            "next_month_start_utc": "2026-09-01T05:00:00+00:00",
             "projected_earliest_required_start_utc": (
-                "2026-08-02T05:00:00+00:00" if not available else None
+                "2026-09-01T05:00:00+00:00" if not available else None
             ),
-            "remaining_seconds": 16000 if available else 1249,
+            "remaining_seconds": 18000 if available else 3600,
         }
 
     @classmethod
@@ -165,7 +173,7 @@ class ResumePlanningTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "")
         return status, error_output.getvalue(), runner, which
 
-    def test_plans_guarded_boundary_from_validated_inputs(self) -> None:
+    def test_no_fit_requires_manual_monthly_retry(self) -> None:
         value = PLANNER.build_resume_plan(
             release="j13",
             checkpoint=self.CHECKPOINT,
@@ -173,12 +181,28 @@ class ResumePlanningTests(unittest.TestCase):
             completed_results=965,
             allowance=self.allowance(available=False),
             max_session_wall_seconds=14400,
-            boundary_guard_seconds=10,
+        )
+        self.assertEqual(value["status"], "wait_for_monthly_allowance")
+        self.assertIsNone(value["controller"])
+        self.assertEqual(
+            value["allowance"]["next_month_start_utc"],
+            "2026-09-01T05:00:00+00:00",
+        )
+
+    def test_full_fit_emits_direct_controller_without_future_wait(self) -> None:
+        value = PLANNER.build_resume_plan(
+            release="j13",
+            checkpoint=self.CHECKPOINT,
+            checkpoint_sha256=self.SHA256,
+            completed_results=965,
+            allowance=self.allowance(available=True),
+            max_session_wall_seconds=14400,
         )
         self.assertEqual(value["status"], "ready_to_arm")
         arguments = value["controller"]["arguments"]
         self.assertIn("965", arguments)
-        self.assertIn("2026-08-02T05:00:10+00:00", arguments)
+        self.assertNotIn("-NotBeforeUtc", arguments)
+        self.assertEqual(arguments[-1], "-Execute")
 
     def test_complete_release_has_no_controller(self) -> None:
         value = PLANNER.build_resume_plan(
@@ -188,7 +212,6 @@ class ResumePlanningTests(unittest.TestCase):
             completed_results=2700,
             allowance=self.allowance(available=True),
             max_session_wall_seconds=14400,
-            boundary_guard_seconds=10,
         )
         self.assertEqual(value["status"], "release_complete")
         self.assertIsNone(value["controller"])
@@ -204,7 +227,6 @@ class ResumePlanningTests(unittest.TestCase):
                 completed_results=965,
                 allowance=allowance,
                 max_session_wall_seconds=14400,
-                boundary_guard_seconds=10,
             )
 
     def test_rejects_inconsistent_allowance_decision(self) -> None:
@@ -218,7 +240,6 @@ class ResumePlanningTests(unittest.TestCase):
                 completed_results=965,
                 allowance=allowance,
                 max_session_wall_seconds=14400,
-                boundary_guard_seconds=10,
             )
 
     def test_validated_count_rejects_missing_run_object(self) -> None:

@@ -518,21 +518,22 @@ also deletes all parked runners. Missing or unsafe reaper configuration fails
 closed to immediate deletion. See the runbook for `init-reaper` setup, status,
 lease behavior, sanitization, and recovery.
 
-High-memory usage has a four-hour daily base allowance and a bank capped at four
-hours. The bank starts full before the earliest trusted run, unused daily time
-refills it, usage above the base consumes it, and overshoot beyond the bank
-becomes uncapped debt that reduces later capacity. New high-memory `up` and
-`run` starts are forbidden once actual usage reaches the base allowance adjusted
-by the bank or debt at the start of the fixed-EST day. Fixed EST means UTC-05:00
-year-round, without daylight-saving time; the controller uses Linode-controlled
-timestamps rather than the local Windows clock. Run
-`.\linode-runner.ps1 check --high-memory` to see the base allowance, starting
-bank or debt, adjusted capacity, actual and remaining usage, projected next
-balance, next accounting boundary, and projected eligibility when blocked. Use
-`.\linode-runner.ps1 allowance --required-seconds N` when automation needs the
-same trusted state as JSON plus the earliest projected boundary with enough
-capacity for an `N`-second slice. The projection assumes no further usage and
-must be rechecked immediately before acquisition. Use
+High-memory usage has a 100-hour calendar-month allowance. Each distinct
+Linode lifecycle counts its current-month overlap rounded up to a whole hour;
+55 minutes counts as one hour and 65 minutes counts as two. Reuse within the
+same lifecycle is not rounded again, while overlaps on opposite sides of a
+month boundary are rounded independently. New high-memory `up` and `run`
+starts, including parked reactivation, are forbidden once billed usage reaches
+100 hours. Existing runners may overrun, but there is no banking and no debt:
+unused time and overrun are discarded at the next month boundary. Fixed EST
+means UTC-05:00 year-round, without daylight-saving time; the controller uses
+Linode-controlled timestamps rather than the local Windows clock. Run
+`.\linode-runner.ps1 check --high-memory` to see exact elapsed time, rounded
+billed usage, remaining allowance, and the next monthly boundary. Use
+`.\linode-runner.ps1 allowance --required-seconds N` when automation needs
+schema-v2 JSON and a whole-hour-rounded full-fit decision for an `N`-second
+slice. A no-fit result is informational and requires a manual retry after the
+next monthly reset; it never waits or schedules automatically. Use
 the guarded `up`/`sync`/`exec`/`down` lifecycle documented in the runbook only
 when an exceptional task needs individual remote commands.
 
