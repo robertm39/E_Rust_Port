@@ -23,6 +23,7 @@ $retryInterval = New-TimeSpan -Minutes 5
 $retryDuration = New-TimeSpan -Hours 24
 $retryIntervalIso8601 = "PT5M"
 $retryDurationIso8601 = "P1D"
+$immediateLaunchDelay = New-TimeSpan -Minutes 5
 
 function Get-RequiredProperty {
     param(
@@ -157,6 +158,7 @@ function Get-TaskEvidence {
         }
         task = [ordered]@{
             name = $ValidatedPlan.task_name
+            launch_mode = $ValidatedPlan.launch_mode
             trigger_utc = $ValidatedPlan.not_before.ToString("O")
             retry_interval = $retryIntervalIso8601
             retry_duration = $retryDurationIso8601
@@ -250,19 +252,17 @@ function Get-ValidatedPlan {
     }
 
     $allowance = Get-RequiredProperty $document "allowance" "resume plan"
-    if ([bool](
+    $requiredStartAvailableNow = [bool](
         Get-RequiredProperty `
             $allowance `
             "required_start_available_now" `
             "allowance"
-    )) {
-        throw "Immediate-start plans must be executed directly, not scheduled"
-    }
-    $projectedStart = [DateTimeOffset]::Parse(
+    )
+    $observedAt = [DateTimeOffset]::Parse(
         [string](
             Get-RequiredProperty `
                 $allowance `
-                "projected_earliest_required_start_utc" `
+                "observed_at_utc" `
                 "allowance"
         ),
         [Globalization.CultureInfo]::InvariantCulture,
@@ -271,6 +271,22 @@ function Get-ValidatedPlan {
             [Globalization.DateTimeStyles]::AdjustToUniversal
         )
     )
+    $projectedStart = $null
+    if (-not $requiredStartAvailableNow) {
+        $projectedStart = [DateTimeOffset]::Parse(
+            [string](
+                Get-RequiredProperty `
+                    $allowance `
+                    "projected_earliest_required_start_utc" `
+                    "allowance"
+            ),
+            [Globalization.CultureInfo]::InvariantCulture,
+            (
+                [Globalization.DateTimeStyles]::AssumeUniversal -bor
+                [Globalization.DateTimeStyles]::AdjustToUniversal
+            )
+        )
+    }
 
     $controller = Get-RequiredProperty $document "controller" "resume plan"
     $controllerPath = Get-CanonicalPath `
@@ -290,16 +306,22 @@ function Get-ValidatedPlan {
         Get-RequiredProperty $controller "arguments" "controller" |
             ForEach-Object { [string]$_ }
     )
-    $expectedFlags = @(
+    $expectedFlags = [Collections.Generic.List[string]]@(
         "-Release",
         "-CheckpointArchive",
         "-CheckpointSha256",
         "-ExpectedInitialResults",
-        "-MaxSessionWallSeconds",
-        "-NotBeforeUtc"
+        "-MaxSessionWallSeconds"
     )
-    if ($arguments.Count -ne 13) {
-        throw "Scheduled controller must have six exact flag/value pairs and -Execute"
+    if (-not $requiredStartAvailableNow) {
+        $expectedFlags.Add("-NotBeforeUtc")
+    }
+    $terminalArgumentIndex = $expectedFlags.Count * 2
+    if ($arguments.Count -ne $terminalArgumentIndex + 1) {
+        throw (
+            "Scheduled controller must have $($expectedFlags.Count) exact " +
+            "flag/value pairs and -Execute"
+        )
     }
     for ($index = 0; $index -lt $expectedFlags.Count; $index++) {
         Assert-ExactString `
@@ -307,7 +329,10 @@ function Get-ValidatedPlan {
             $expectedFlags[$index] `
             "controller flag $index"
     }
-    Assert-ExactString $arguments[12] "-Execute" "controller terminal flag"
+    Assert-ExactString `
+        $arguments[$terminalArgumentIndex] `
+        "-Execute" `
+        "controller terminal flag"
     Assert-ExactString $arguments[1] $release "controller release"
     Assert-ExactString `
         ([IO.Path]::GetFullPath($arguments[3])) `
@@ -331,17 +356,22 @@ function Get-ValidatedPlan {
     if ($requiredSeconds -ne $maxSessionWallSeconds + 300) {
         throw "Allowance duration does not match the controller service ceiling"
     }
-    $notBefore = [DateTimeOffset]::Parse(
-        $arguments[11],
-        [Globalization.CultureInfo]::InvariantCulture,
-        (
-            [Globalization.DateTimeStyles]::AssumeUniversal -bor
-            [Globalization.DateTimeStyles]::AdjustToUniversal
+    $launchMode = "immediate_full_fit"
+    $notBefore = $observedAt.Add($immediateLaunchDelay)
+    if (-not $requiredStartAvailableNow) {
+        $launchMode = "legacy_allowance_boundary"
+        $notBefore = [DateTimeOffset]::Parse(
+            $arguments[11],
+            [Globalization.CultureInfo]::InvariantCulture,
+            (
+                [Globalization.DateTimeStyles]::AssumeUniversal -bor
+                [Globalization.DateTimeStyles]::AdjustToUniversal
+            )
         )
-    )
-    $boundaryGuardSeconds = ($notBefore - $projectedStart).TotalSeconds
-    if ($boundaryGuardSeconds -lt 0 -or $boundaryGuardSeconds -gt 60) {
-        throw "Scheduled boundary guard must be between zero and 60 seconds"
+        $boundaryGuardSeconds = ($notBefore - $projectedStart).TotalSeconds
+        if ($boundaryGuardSeconds -lt 0 -or $boundaryGuardSeconds -gt 60) {
+            throw "Scheduled boundary guard must be between zero and 60 seconds"
+        }
     }
     if ($Register) {
         if ($notBefore -le [DateTimeOffset]::UtcNow) {
@@ -379,6 +409,7 @@ function Get-ValidatedPlan {
         completed_results = $completedResults
         expected_results = $expectedResults
         max_session_wall_seconds = $maxSessionWallSeconds
+        launch_mode = $launchMode
         not_before = $notBefore
         controller_path = $controllerPath
         controller_arguments = $arguments
@@ -583,7 +614,11 @@ if ($Launch) {
 
         $controllerArguments = @($validatedPlan.controller_arguments)
         $controllerParameters = @{}
-        for ($index = 0; $index -lt 12; $index += 2) {
+        for (
+            $index = 0;
+            $index -lt $controllerArguments.Count - 1;
+            $index += 2
+        ) {
             $name = $controllerArguments[$index].Substring(1)
             $controllerParameters[$name] = $controllerArguments[$index + 1]
         }

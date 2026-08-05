@@ -690,10 +690,11 @@ while the manually registered task survived.  The tracked
 `schedule_casc_resume.ps1` now makes that handoff reproducible.  Its default is
 nonmutating.  It requires the planner's exact schema and `ready_to_arm` state,
 an incomplete canonical release total, a hash-matching checkpoint and exact
-controller inside the repository, six ordered controller flag/value pairs plus
-`-Execute`, a future unavailable-now allowance, matching batch/service
-durations, and a zero-to-60-second boundary guard.  Immediate-start plans must
-be executed directly instead of being disguised as scheduled work.
+controller inside the repository, five ordered controller flag/value pairs plus
+`-Execute` for a current full-fit allowance, matching batch/service durations,
+and a deterministic trigger exactly five minutes after the allowance
+observation.  The retained legacy path accepts six pairs only when the sixth is
+an exact `-NotBeforeUtc` within 60 seconds of the old projected boundary.
 
 Explicit `-Register` refuses replacement and creates one current-user task with
 the validated UTC trigger, exact action and working directory, wake/network and
@@ -722,13 +723,17 @@ Reproduction commands are:
 python experiments/2026-07-28-004-casc-benchmark-matrix/test_schedule_casc_resume.py
 ```
 
-Four focused tests pass.  They cover default nonmutation, checkpoint/hash/path,
+Six focused tests pass.  They cover default nonmutation, checkpoint/hash/path,
 argument and allowance rejection, and real synthetic future tasks.  One is
 registered, audited, deliberately weakened, rejected, and removed in `finally`;
-another is started early to model the first available retry, proves that it
+another uses the current immediate full-fit plan shape, is started early to
+model the first available retry, proves that it
 disables itself before the deliberately invalid synthetic checkpoint reaches
 the controller, and proves that a second start is refused without changing the
-last-run identity.  Exact cleanup leaves no synthetic tasks behind.
+last-run identity.  The immediate trigger is derived from the trusted allowance
+observation rather than the local clock, so preview, registration, launch, and
+later audit agree on one task identity. Exact cleanup leaves no synthetic tasks
+behind.
 
 The original one-shot task's real audit passed against
 plan SHA-256 `43b0d90a...`, checkpoint SHA-256 `1f51d7cc...`, J13 count 965,
@@ -736,8 +741,11 @@ trigger `2026-08-03T05:00:10Z`, exact current-user SID, and all scheduler
 settings.  The ignored machine-readable audit is retained at
 `.artifacts/casc-benchmark/j13-scheduler-audit-260803.json`, SHA-256
 `85e86505e1060b1383b2828f72e8decec155475d345e623fbecd3ac5e0bee473`.
-The tool schedules only future unavailable-now plans within 24 hours; it does
-not replace tasks or broaden the controller's provider authority.
+The tool registers only a trigger within 24 hours; it does not wait for or
+automatically schedule a monthly allowance reset, replace tasks, or broaden the
+controller's provider authority.  A current immediate plan remains durable
+across the local PowerShell handoff, while the controller independently
+revalidates the live allowance and zero-provider state before acquisition.
 
 That original task also supplied the real missed-trigger reproduction.  The
 Windows machine was unavailable at `2026-08-03T05:00:10Z`; after it returned,
@@ -1086,6 +1094,17 @@ a named-parameter hashtable from the already-validated six flag/value pairs and
 sets `Execute` as a switch before invocation.  Synthetic hashtable-bound success
 and failure tests plus the real invalid-checkpoint task path cover the corrected
 binding without permitting unvalidated parameters.
+
+The later calendar-month allowance policy made every fresh full-fit planner
+result immediate and left the durable launcher accepting only the obsolete
+future-boundary shape.  Immediate plans now retain the same audited Task
+Scheduler handoff: their five exact flag/value pairs are named-splatted, their
+task identity uses a deterministic trigger five minutes after the trusted
+allowance observation, and the launch still self-disables before invoking the
+controller.  No-fit monthly results remain informational and cannot be armed.
+The six scheduler tests include a real immediate-plan registration and forced
+launch through the deliberately invalid checkpoint path; the complete terminal
+failure log and refusal of a duplicate start are preserved.
 
 ## Remaining acceptance boundary
 

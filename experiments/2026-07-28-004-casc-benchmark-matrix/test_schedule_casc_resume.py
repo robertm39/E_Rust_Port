@@ -42,6 +42,7 @@ class CascResumeSchedulerTests(unittest.TestCase):
         *,
         hours_ahead: int = 2,
         seconds_ahead: int | None = None,
+        immediate: bool = False,
     ) -> dict:
         now = datetime.now(timezone.utc).replace(microsecond=0)
         if seconds_ahead is None:
@@ -51,6 +52,23 @@ class CascResumeSchedulerTests(unittest.TestCase):
             seconds=seconds_ahead,
         )
         projected = not_before - timedelta(seconds=10)
+        arguments = [
+            "-Release",
+            "j13",
+            "-CheckpointArchive",
+            str(self.checkpoint.resolve()),
+            "-CheckpointSha256",
+            self.checkpoint_sha256,
+            "-ExpectedInitialResults",
+            "1",
+            "-MaxSessionWallSeconds",
+            "14400",
+        ]
+        if not immediate:
+            arguments.extend(
+                ["-NotBeforeUtc", not_before.isoformat(timespec="seconds")]
+            )
+        arguments.append("-Execute")
         return {
             "schema_version": 1,
             "kind": "umlaut-casc-next-resume-plan",
@@ -65,29 +83,17 @@ class CascResumeSchedulerTests(unittest.TestCase):
             "allowance": {
                 "observed_at_utc": now.isoformat(timespec="seconds"),
                 "required_seconds": 14700,
-                "required_start_available_now": False,
-                "projected_earliest_required_start_utc": projected.isoformat(
-                    timespec="seconds"
+                "required_start_available_now": immediate,
+                "projected_earliest_required_start_utc": (
+                    None
+                    if immediate
+                    else projected.isoformat(timespec="seconds")
                 ),
-                "remaining_seconds": 100,
+                "remaining_seconds": 18000 if immediate else 100,
             },
             "controller": {
                 "script": str(CONTROLLER.resolve()),
-                "arguments": [
-                    "-Release",
-                    "j13",
-                    "-CheckpointArchive",
-                    str(self.checkpoint.resolve()),
-                    "-CheckpointSha256",
-                    self.checkpoint_sha256,
-                    "-ExpectedInitialResults",
-                    "1",
-                    "-MaxSessionWallSeconds",
-                    "14400",
-                    "-NotBeforeUtc",
-                    not_before.isoformat(timespec="seconds"),
-                    "-Execute",
-                ],
+                "arguments": arguments,
             },
         }
 
@@ -174,6 +180,19 @@ class CascResumeSchedulerTests(unittest.TestCase):
         self.assertTrue(evidence["task"]["wake_to_run"])
         self.assertEqual(evidence["task"]["multiple_instances"], "IgnoreNew")
 
+    def test_immediate_plan_has_deterministic_durable_handoff(self) -> None:
+        document = self.plan(immediate=True)
+        result = self.invoke(self.write_plan(document, "immediate.json"))
+        evidence = json.loads(result.stdout)
+
+        observed = datetime.fromisoformat(document["allowance"]["observed_at_utc"])
+        trigger = datetime.fromisoformat(evidence["task"]["trigger_utc"])
+        self.assertEqual(evidence["task"]["launch_mode"], "immediate_full_fit")
+        self.assertEqual(trigger, observed + timedelta(minutes=5))
+        self.assertNotIn(
+            "-NotBeforeUtc", evidence["task"]["controller"]["arguments"]
+        )
+
     def test_malformed_plans_fail_closed(self) -> None:
         cases: list[tuple[str, dict, str]] = []
 
@@ -183,11 +202,17 @@ class CascResumeSchedulerTests(unittest.TestCase):
 
         extra_argument = copy.deepcopy(self.plan())
         extra_argument["controller"]["arguments"].insert(-1, "--unexpected")
-        cases.append(("extra-argument", extra_argument, "six exact flag/value"))
+        cases.append(("extra-argument", extra_argument, "6 exact flag/value"))
 
-        immediate = copy.deepcopy(self.plan())
-        immediate["allowance"]["required_start_available_now"] = True
-        cases.append(("immediate", immediate, "executed directly"))
+        inconsistent_immediate = copy.deepcopy(self.plan())
+        inconsistent_immediate["allowance"]["required_start_available_now"] = True
+        cases.append(
+            (
+                "inconsistent-immediate",
+                inconsistent_immediate,
+                "5 exact flag/value pairs",
+            )
+        )
 
         outside = copy.deepcopy(self.plan())
         outside_path = Path(os.environ["WINDIR"]) / "System32" / "notepad.exe"
@@ -244,7 +269,7 @@ class CascResumeSchedulerTests(unittest.TestCase):
 
     def test_launch_disables_exact_task_before_controller(self) -> None:
         plan = self.write_plan(
-            self.plan(hours_ahead=0, seconds_ahead=30),
+            self.plan(hours_ahead=0, seconds_ahead=30, immediate=True),
             "launch-plan.json",
         )
         existing_launch_logs = set(
@@ -288,9 +313,15 @@ class CascResumeSchedulerTests(unittest.TestCase):
                     break
                 time.sleep(0.25)
             self.assertEqual(len(created_launch_logs), 1)
-            launch_log = next(iter(created_launch_logs)).read_text(
-                encoding="utf-8"
-            )
+            launch_path = next(iter(created_launch_logs))
+            deadline = time.monotonic() + 30
+            launch_log = launch_path.read_text(encoding="utf-8")
+            while (
+                "task_launch_failed" not in launch_log
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.25)
+                launch_log = launch_path.read_text(encoding="utf-8")
             self.assertIn("task_launch_started", launch_log)
             self.assertIn("task_disabled", launch_log)
             self.assertIn("controller_invocation_started", launch_log)
