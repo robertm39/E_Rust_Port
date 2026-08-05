@@ -124,6 +124,25 @@ class PayloadTests(unittest.TestCase):
 
 
 class ExplicitTransferTests(unittest.TestCase):
+    @staticmethod
+    def install_wrapper_python(root: Path) -> None:
+        scripts = root / ".venv" / "Scripts"
+        scripts.mkdir(parents=True)
+        shutil.copy2(sys.executable, scripts / "python.exe")
+        source_config = Path(sys.prefix) / "pyvenv.cfg"
+        if source_config.is_file():
+            shutil.copy2(source_config, root / ".venv" / "pyvenv.cfg")
+        else:
+            base_executable = Path(
+                getattr(sys, "_base_executable", sys.executable)
+            ).resolve()
+            (root / ".venv" / "pyvenv.cfg").write_text(
+                f"home = {base_executable.parent}\n"
+                "include-system-site-packages = false\n"
+                f"executable = {base_executable}\n",
+                encoding="utf-8",
+            )
+
     def test_transfer_commands_parse_explicit_file_paths(self):
         upload = runner.parser().parse_args(
             ["upload", "local.bin", "/root/reference.bin"]
@@ -224,6 +243,7 @@ class ExplicitTransferTests(unittest.TestCase):
             root = Path(temporary)
             copied_wrapper = root / "linode-runner.ps1"
             copied_wrapper.write_bytes(wrapper.read_bytes())
+            self.install_wrapper_python(root)
             controller = root / "tools" / "linode-runner" / "linode_runner.py"
             controller.parent.mkdir(parents=True)
             controller.write_text(
@@ -271,6 +291,7 @@ class ExplicitTransferTests(unittest.TestCase):
             root = Path(temporary)
             copied_wrapper = root / "linode-runner.ps1"
             copied_wrapper.write_bytes(wrapper.read_bytes())
+            self.install_wrapper_python(root)
             controller = root / "tools" / "linode-runner" / "linode_runner.py"
             controller.parent.mkdir(parents=True)
             controller.write_text(
@@ -2167,6 +2188,7 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn("-RestartCount 10", wrapper)
         action_start = wrapper.index("$actionArguments")
         action_end = wrapper.index("$action =", action_start)
+        self.assertIn("-WindowStyle Hidden", wrapper[action_start:action_end])
         self.assertNotIn("TOKEN", wrapper[action_start:action_end].upper())
         self.assertIn("ZeroFreeBSTR($reaperTokenPointer)", wrapper)
 

@@ -125,7 +125,8 @@ function Sync-LocalReaperTasks {
             $triggerAt = [DateTime]::Now.AddSeconds(5)
         }
         $actionArguments = (
-            '-NoProfile -NonInteractive -ExecutionPolicy Bypass ' +
+            '-WindowStyle Hidden -NoProfile -NonInteractive ' +
+            '-ExecutionPolicy Bypass ' +
             '-File "{0}" reap --linode-id {1} --lease-id {2}'
         ) -f $PSCommandPath, $linodeId, $leaseId
         $action = New-ScheduledTaskAction `

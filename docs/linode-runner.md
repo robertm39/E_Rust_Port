@@ -130,7 +130,12 @@ active to parked:
 
 - a Windows Scheduled Task named `Umlaut-Linode-Reaper-<linode-id>` invokes
   the wrapper with the exact Linode ID and a random lease ID; the token never
-  appears in task arguments;
+  appears in task arguments. The task retains the current user's limited
+  interactive token so Windows DPAPI and outbound API/SSH access continue to
+  work, but invokes the documented
+  [`powershell.exe -WindowStyle Hidden`](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_powershell_exe?view=powershell-5.1)
+  mode so cleanup and its bounded retries cannot open or focus a console
+  window;
 - a persistent systemd timer on the Linode invokes a small standard-library
   reaper using a root-readable token and state file. It verifies both live
   resource labels, marks the free firewall with the lease outcome, and deletes
@@ -141,6 +146,13 @@ The local reaper later reconciles an already-deleted Linode, removes its free
 firewall, archives the state, and removes the Scheduled Task. Reaper commands
 are idempotent and lease-checked. A reused runner has both timers disarmed and
 its temporary reaper access removed before new source is uploaded.
+
+Do not change the Windows reaper to an S4U principal merely to hide its
+console. Windows documents that
+[S4U tasks have no access to the network or encrypted files](https://learn.microsoft.com/en-us/windows/win32/taskschd/principal-logontype),
+which conflicts with the restricted Linode API calls and the user-scoped DPAPI
+token. Hidden-window PowerShell preserves those capabilities without exposing
+the scheduled process on the interactive desktop.
 
 Parking is deliberately fail-closed. If restricted reaper setup is missing,
 incomplete, unexpectedly privileged, or cannot be armed, `down`/`run` delete

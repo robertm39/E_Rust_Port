@@ -1130,6 +1130,79 @@ invocation `e9bbde41c8894c82ae538eb646535ed9`, and zero restarts.  This producti
 retry crosses the original pre-controller failure boundary without a duplicate
 provider resource; checkpoint capture remains part of the parent campaign.
 
+## Headless scheduled launches and orphan-plan recovery
+
+Question: why did a PowerShell console repeatedly take focus every five
+minutes, and can it be stopped without weakening the missed-trigger retry or
+interrupting the live J13 controller?  The exact Windows task inventory found
+one enabled synthetic task,
+`Umlaut-CASC-J13-Resume-20260805T041500Z`, whose action referenced deleted test
+plan `.artifacts/casc-benchmark/tmp0xlibvr3/plan.json`.  It last failed at
+`2026-08-05T22:50:01Z` with result `0x00000001` and had another `PT5M` retry
+scheduled for `22:55:00Z`.  Its limited `Interactive` principal ran ordinary
+`powershell.exe`, placing every retry in the logged-in desktop session.  No
+`Umlaut-Linode-Reaper-*` task or parked runner existed, falsifying the reaper
+itself as the immediate source.
+
+The synthetic registration test used a plan 23 hours in the future and removed
+its temporary directory when the creating process ended.  Its `finally`
+cleanup suppressed unregister errors and verified only the cleanup
+PowerShell's exit code, so an interrupted or failed cleanup could leave a task
+that appeared successfully cleaned.  The scheduled script then validated the
+external plan before reaching `Disable-ScheduledTask`; a missing plan therefore
+failed on every retry without disabling the task.  After revalidating its exact
+name, action, repository, deleted temporary plan, description, principal, and
+retry shape, the orphan alone was unregistered.  The production task
+`Umlaut-CASC-J13-Resume-20260805T224538Z` remained disabled-but-running with its
+controller process and provider ownership unchanged.
+
+New CASC actions bind the canonical task name explicitly and run
+`powershell.exe -WindowStyle Hidden`.  Launch first validates a plan-independent
+envelope containing the exact name/timestamp, action script, lexical plan path,
+working directory, description, current-user SID, trigger, retry policy, and
+guarded settings.  It disables and revalidates that exact task before reading
+the plan.  The existing immutable plan/hash/controller validation then runs and
+must reproduce the same name, path, and disabled task before provider work.
+Missing or invalid JSON plans now leave a durable launch log and fail once with
+no controller invocation.  Action drift still fails before disablement.  The
+Linode reaper action uses the same hidden window while retaining its limited
+interactive principal: S4U would remove network and encrypted-file access,
+which the API/SSH workflow and user-scoped DPAPI token require.
+
+The Windows test harness now tracks every synthetic identity, stops and
+unregisters it before deleting temporary input, verifies actual absence, and
+scavenges an older task only when all canonical production fields match and
+its plan is a missing `tmp*` artifact.  A triggerless, uniquely named live task
+proved a hidden PowerShell process existed with zero visible matching windows.
+Separate Task Scheduler regressions prove valid-plan launch, missing-plan and
+corrupt-plan single failure, action drift refusal, duplicate-start refusal,
+and zero retained synthetic tasks.  Reproduction from the repository root:
+
+```powershell
+$tokens=$null; $errors=$null
+[Management.Automation.Language.Parser]::ParseFile(
+    (Resolve-Path experiments/2026-07-28-004-casc-benchmark-matrix/schedule_casc_resume.ps1),
+    [ref]$tokens,
+    [ref]$errors
+) | Out-Null
+.\.venv\Scripts\python.exe `
+    experiments/2026-07-28-004-casc-benchmark-matrix/test_schedule_casc_resume.py -v
+.\.venv\Scripts\python.exe tools/linode-runner/test_linode_runner.py -v
+```
+
+All 10 scheduler tests pass in 103.002 seconds.  All 91 runner tests pass with
+five expected POSIX-only skips; their relocated-wrapper cases now copy the
+active test interpreter instead of relying on a machine-wide Windows App
+Execution Alias.  Both PowerShell scripts parse, Python compilation and
+`git diff --check` pass, and post-test inventory contains no synthetic CASC or
+Linode reaper task.  Historical disabled production tasks remain as audit
+evidence; this change neither removes them nor alters an already-running
+controller.  A final bounded live probe found the preserved service active and
+running with MainPID `3971`, invocation
+`e9bbde41c8894c82ae538eb646535ed9`, zero restarts, and 1,541 results, ten more
+than its restored checkpoint.  Linode `102345835` remained running behind
+enabled firewall `107959971`, with no parked resources.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and

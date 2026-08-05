@@ -12,6 +12,10 @@ param(
     [Parameter(Mandatory = $true, ParameterSetName = "Launch")]
     [switch]$Launch,
 
+    [Parameter(Mandatory = $true, ParameterSetName = "Launch")]
+    [ValidatePattern('^Umlaut-CASC-(J13|CASC2025)-Resume-\d{8}T\d{6}Z$')]
+    [string]$ScheduledTaskName,
+
     [ValidateRange(1, 24)]
     [int]$ExecutionTimeHours = 8
 )
@@ -52,11 +56,22 @@ function Get-CanonicalPath {
         [string]$Description,
 
         [Parameter(Mandatory = $true)]
-        [string]$RepositoryRoot
+        [string]$RepositoryRoot,
+
+        [switch]$AllowMissing
     )
 
     $candidate = [IO.Path]::GetFullPath($Path)
-    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+    if (
+        (Test-Path -LiteralPath $candidate) -and
+        -not (Test-Path -LiteralPath $candidate -PathType Leaf)
+    ) {
+        throw "$Description is not a plain file: $candidate"
+    }
+    if (
+        -not $AllowMissing -and
+        -not (Test-Path -LiteralPath $candidate -PathType Leaf)
+    ) {
         throw "$Description is missing: $candidate"
     }
     $rootPrefix = $RepositoryRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
@@ -115,6 +130,28 @@ function Format-ActionArgument {
     return $Value
 }
 
+function Get-ScheduledActionArguments {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PlanPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TaskName
+    )
+
+    $template = (
+        '-WindowStyle Hidden -NoProfile -NonInteractive ' +
+        '-ExecutionPolicy Bypass -File {0} -Plan {1} -Launch ' +
+        '-ScheduledTaskName {2} -ExecutionTimeHours {3}'
+    )
+    return $template -f @(
+        (Format-ActionArgument -Value $PSCommandPath -AlwaysQuote),
+        (Format-ActionArgument -Value $PlanPath -AlwaysQuote),
+        (Format-ActionArgument -Value $TaskName -AlwaysQuote),
+        $ExecutionTimeHours
+    )
+}
+
 function Get-AccountSid {
     param(
         [Parameter(Mandatory = $true)]
@@ -165,6 +202,7 @@ function Get-TaskEvidence {
             disables_before_controller = $true
             execute = "powershell.exe"
             arguments = $ValidatedPlan.action_arguments
+            window_style = "Hidden"
             working_directory = $ValidatedPlan.repo_root
             controller = [ordered]@{
                 script = $ValidatedPlan.controller_path
@@ -382,18 +420,13 @@ function Get-ValidatedPlan {
         }
     }
 
-    $actionArguments = (
-        '-NoProfile -NonInteractive -ExecutionPolicy Bypass ' +
-        '-File {0} -Plan {1} -Launch -ExecutionTimeHours {2}' -f @(
-            (Format-ActionArgument -Value $PSCommandPath -AlwaysQuote),
-            (Format-ActionArgument -Value $canonicalPlan -AlwaysQuote),
-            $ExecutionTimeHours
-        )
-    )
     $taskName = "Umlaut-CASC-{0}-Resume-{1}" -f @(
         $release.ToUpperInvariant(),
         $notBefore.ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
     )
+    $actionArguments = Get-ScheduledActionArguments `
+        -PlanPath $canonicalPlan `
+        -TaskName $taskName
     $principal = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $principalSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 
@@ -415,6 +448,59 @@ function Get-ValidatedPlan {
         controller_arguments = $arguments
         action_arguments = $actionArguments
         task_name = $taskName
+        principal = $principal
+        principal_sid = $principalSid
+    }
+}
+
+function Get-ValidatedLaunchEnvelope {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PlanPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TaskName
+    )
+
+    $taskPattern = '^Umlaut-CASC-(J13|CASC2025)-Resume-(\d{8}T\d{6}Z)$'
+    if ($TaskName -notmatch $taskPattern) {
+        throw "Scheduled launch task name is not canonical: $TaskName"
+    }
+    $release = $Matches[1].ToLowerInvariant()
+    $triggerText = $Matches[2]
+    try {
+        $notBefore = [DateTimeOffset]::ParseExact(
+            $triggerText,
+            "yyyyMMdd'T'HHmmss'Z'",
+            [Globalization.CultureInfo]::InvariantCulture,
+            (
+                [Globalization.DateTimeStyles]::AssumeUniversal -bor
+                [Globalization.DateTimeStyles]::AdjustToUniversal
+            )
+        )
+    }
+    catch {
+        throw "Scheduled launch task timestamp is invalid: $triggerText"
+    }
+
+    $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+    $canonicalPlan = Get-CanonicalPath `
+        -Path $PlanPath `
+        -Description "resume plan" `
+        -RepositoryRoot $repoRoot `
+        -AllowMissing
+    $principal = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $principalSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+
+    return [pscustomobject]@{
+        repo_root = $repoRoot
+        plan_path = $canonicalPlan
+        release = $release
+        not_before = $notBefore
+        action_arguments = Get-ScheduledActionArguments `
+            -PlanPath $canonicalPlan `
+            -TaskName $TaskName
+        task_name = $TaskName
         principal = $principal
         principal_sid = $principalSid
     }
@@ -452,6 +538,10 @@ function Assert-TaskMatches {
         $ValidatedPlan.repo_root `
         "scheduled working directory" `
         -IgnoreCase
+    Assert-ExactString `
+        ([string]$task.Description) `
+        "Guarded immutable $($ValidatedPlan.release) checkpoint resume for Umlaut" `
+        "scheduled description"
 
     $trigger = @($task.Triggers)[0]
     $triggerTime = [DateTimeOffset]::Parse([string]$trigger.StartBoundary)
@@ -530,6 +620,95 @@ function Invoke-LoggedController {
     }
 }
 
+if ($Launch) {
+    $launchEnvelope = Get-ValidatedLaunchEnvelope `
+        -PlanPath $Plan `
+        -TaskName $ScheduledTaskName
+    $artifactRoot = Join-Path $launchEnvelope.repo_root ".artifacts\casc-benchmark"
+    [IO.Directory]::CreateDirectory($artifactRoot) | Out-Null
+    $launchId = (
+        [DateTimeOffset]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-$PID"
+    )
+    $launchLog = Join-Path (
+        $artifactRoot
+    ) "scheduled-launch-$($launchEnvelope.release)-$launchId.log"
+    if (Test-Path -LiteralPath $launchLog) {
+        throw "Refusing to overwrite scheduled-launch log: $launchLog"
+    }
+    $startedAt = [DateTimeOffset]::UtcNow.ToString("O")
+    [IO.File]::WriteAllText(
+        $launchLog,
+        (
+            "$startedAt task_launch_started " +
+            "task=$($launchEnvelope.task_name) " +
+            "plan=$($launchEnvelope.plan_path)`r`n"
+        )
+    )
+    try {
+        Assert-TaskMatches -ValidatedPlan $launchEnvelope
+        Disable-ScheduledTask -TaskName $launchEnvelope.task_name | Out-Null
+        Assert-TaskMatches `
+            -ValidatedPlan $launchEnvelope `
+            -ExpectedEnabled $false
+        [IO.File]::AppendAllText(
+            $launchLog,
+            "$([DateTimeOffset]::UtcNow.ToString('O')) task_disabled`r`n"
+        )
+
+        $validatedPlan = Get-ValidatedPlan -PlanPath $Plan
+        Assert-ExactString `
+            $validatedPlan.task_name `
+            $launchEnvelope.task_name `
+            "validated launch task name"
+        Assert-ExactString `
+            $validatedPlan.plan_path `
+            $launchEnvelope.plan_path `
+            "validated launch plan path" `
+            -IgnoreCase
+        Assert-TaskMatches `
+            -ValidatedPlan $validatedPlan `
+            -ExpectedEnabled $false
+        [IO.File]::AppendAllText(
+            $launchLog,
+            (
+                "$([DateTimeOffset]::UtcNow.ToString('O')) plan_validated " +
+                "sha256=$($validatedPlan.plan_sha256)`r`n"
+            )
+        )
+
+        $controllerArguments = @($validatedPlan.controller_arguments)
+        $controllerParameters = @{}
+        for (
+            $index = 0;
+            $index -lt $controllerArguments.Count - 1;
+            $index += 2
+        ) {
+            $parameterName = $controllerArguments[$index].Substring(1)
+            $controllerParameters[$parameterName] = $controllerArguments[$index + 1]
+        }
+        $controllerParameters["Execute"] = $true
+        Invoke-LoggedController `
+            -ControllerPath $validatedPlan.controller_path `
+            -ControllerParameters $controllerParameters `
+            -LogPath $launchLog
+        [IO.File]::AppendAllText(
+            $launchLog,
+            "$([DateTimeOffset]::UtcNow.ToString('O')) task_launch_completed`r`n"
+        )
+        exit 0
+    }
+    catch {
+        [IO.File]::AppendAllText(
+            $launchLog,
+            (
+                "$([DateTimeOffset]::UtcNow.ToString('O')) " +
+                "task_launch_failed error=$($_.Exception.Message)`r`n"
+            )
+        )
+        throw
+    }
+}
+
 $validatedPlan = Get-ValidatedPlan -PlanPath $Plan
 
 if ($Register) {
@@ -578,71 +757,6 @@ if ($Audit) {
     Get-TaskEvidence -ValidatedPlan $validatedPlan -Status "audit_passed" |
         ConvertTo-Json -Depth 6
     exit 0
-}
-
-if ($Launch) {
-    $artifactRoot = Join-Path $validatedPlan.repo_root ".artifacts\casc-benchmark"
-    [IO.Directory]::CreateDirectory($artifactRoot) | Out-Null
-    $launchId = (
-        [DateTimeOffset]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-$PID"
-    )
-    $launchLog = Join-Path (
-        $artifactRoot
-    ) "scheduled-launch-$($validatedPlan.release)-$launchId.log"
-    if (Test-Path -LiteralPath $launchLog) {
-        throw "Refusing to overwrite scheduled-launch log: $launchLog"
-    }
-    $startedAt = [DateTimeOffset]::UtcNow.ToString("O")
-    [IO.File]::WriteAllText(
-        $launchLog,
-        (
-            "$startedAt task_launch_started " +
-            "task=$($validatedPlan.task_name) " +
-            "plan_sha256=$($validatedPlan.plan_sha256)`r`n"
-        )
-    )
-    try {
-        Assert-TaskMatches -ValidatedPlan $validatedPlan
-        Disable-ScheduledTask -TaskName $validatedPlan.task_name | Out-Null
-        Assert-TaskMatches `
-            -ValidatedPlan $validatedPlan `
-            -ExpectedEnabled $false
-        [IO.File]::AppendAllText(
-            $launchLog,
-            "$([DateTimeOffset]::UtcNow.ToString('O')) task_disabled`r`n"
-        )
-
-        $controllerArguments = @($validatedPlan.controller_arguments)
-        $controllerParameters = @{}
-        for (
-            $index = 0;
-            $index -lt $controllerArguments.Count - 1;
-            $index += 2
-        ) {
-            $name = $controllerArguments[$index].Substring(1)
-            $controllerParameters[$name] = $controllerArguments[$index + 1]
-        }
-        $controllerParameters["Execute"] = $true
-        Invoke-LoggedController `
-            -ControllerPath $validatedPlan.controller_path `
-            -ControllerParameters $controllerParameters `
-            -LogPath $launchLog
-        [IO.File]::AppendAllText(
-            $launchLog,
-            "$([DateTimeOffset]::UtcNow.ToString('O')) task_launch_completed`r`n"
-        )
-        exit 0
-    }
-    catch {
-        [IO.File]::AppendAllText(
-            $launchLog,
-            (
-                "$([DateTimeOffset]::UtcNow.ToString('O')) " +
-                "task_launch_failed error=$($_.Exception.Message)`r`n"
-            )
-        )
-        throw
-    }
 }
 
 Get-TaskEvidence -ValidatedPlan $validatedPlan -Status "ready_to_register" |
