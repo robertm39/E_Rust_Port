@@ -1106,6 +1106,30 @@ The six scheduler tests include a real immediate-plan registration and forced
 launch through the deliberately invalid checkpoint path; the complete terminal
 failure log and refusal of a duplicate start are preserved.
 
+The first production immediate handoff used plan
+`.artifacts/casc-benchmark/j13-1531-next-resume-plan-260805-2240.json`, SHA-256
+`84cd144b35413f7b0a5308ff3dd2a941c41b9174a7c0ce898040a67737ee3df5`.
+It independently selected J13 1,531/2,700, required 18,000 whole-hour-billed
+seconds for the 14,700-second service ceiling, and observed 288,000 seconds
+remaining.  Task `Umlaut-CASC-J13-Resume-20260805T224538Z` passed its exact
+post-registration audit, then launch log
+`.artifacts/casc-benchmark/scheduled-launch-j13-20260805T224034Z-20004.log`
+proved self-disable and named controller invocation.  Exactly one runner was
+created: `260805-224055-fa64`, Linode `102345835`, firewall `107959971`.
+
+The runner quiesced package maintenance at SHA-256
+`a945562780e72aaeaecb02a4fd41a6d9863967b606d7b14953f24284f5bc84a7`
+and uploaded a 4,184-file source snapshot rooted at commit `9e28e2af`, archive
+SHA-256 `91bb088f9e8b5374a1de6d2b149213f7066b2afdd917187ec67ce46cec744198`.
+All frozen inputs, 1,350 problems, 2,438 axioms, the restored 1,531-result
+inventory, and contract
+`9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676`
+passed before service
+`casc-j13-v2-resume-260805-224055-fa64.service` started with MainPID `3971`,
+invocation `e9bbde41c8894c82ae538eb646535ed9`, and zero restarts.  This production
+retry crosses the original pre-controller failure boundary without a duplicate
+provider resource; checkpoint capture remains part of the parent campaign.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
