@@ -1190,16 +1190,18 @@ $tokens=$null; $errors=$null
 .\.venv\Scripts\python.exe tools/linode-runner/test_linode_runner.py -v
 ```
 
-All 10 scheduler tests pass in 103.002 seconds.  All 91 runner tests pass with
+All 11 scheduler tests pass in 114.529 seconds.  All 91 runner tests pass with
 five expected POSIX-only skips; their relocated-wrapper cases now copy the
 active test interpreter instead of relying on a machine-wide Windows App
-Execution Alias.  Both PowerShell scripts parse, Python compilation and
-`git diff --check` pass, and post-test inventory contains no synthetic CASC or
-Linode reaper task.  Historical disabled production tasks remain as audit
-evidence; this change neither removes them nor alters an already-running
-controller.  A final bounded live probe found the preserved service active and
+Execution Alias.  The surrounding benchmark, package, checkpoint validation,
+resume-controller, resume-planning, and forecast suites add 87 passing tests.
+Both PowerShell scripts parse, Python compilation and `git diff --check` pass,
+and post-test inventory contains no synthetic CASC or Linode reaper task.
+Historical disabled production tasks remain as audit evidence; this change
+neither removes them nor alters an already-running controller.  A final bounded
+live probe at `2026-08-05T23:22:23Z` found the preserved service active and
 running with MainPID `3971`, invocation
-`e9bbde41c8894c82ae538eb646535ed9`, zero restarts, and 1,541 results, ten more
+`e9bbde41c8894c82ae538eb646535ed9`, zero restarts, and 1,546 results, 15 more
 than its restored checkpoint.  Linode `102345835` remained running behind
 enabled firewall `107959971`, with no parked resources.
 

@@ -568,37 +568,8 @@ class CascResumeSchedulerTests(unittest.TestCase):
         self.assert_invalid_plan_disables_before_validation(
             plan,
             lambda: plan.write_text("{not-json\n", encoding="utf-8"),
-            "resume plan is not valid JSON",
+            "Resume plan is not valid JSON",
         )
-
-    def test_corrupt_plan_disables_task_before_validation(self) -> None:
-        plan = self.write_plan(
-            self.plan(hours_ahead=0, seconds_ahead=37, immediate=True),
-            "corrupt-launch-plan.json",
-        )
-        existing_launch_logs = set(
-            ARTIFACT_ROOT.glob("scheduled-launch-j13-*.log")
-        )
-        preview = json.loads(self.invoke(plan).stdout)
-        task_name = preview["task"]["name"]
-        quoted_task_name = task_name.replace("'", "''")
-        self.track_new_task(task_name)
-        self.invoke(plan, "-Register")
-        plan.write_text("{not valid json\n", encoding="utf-8")
-
-        started = self.powershell(
-            f"Start-ScheduledTask -TaskName '{quoted_task_name}'"
-        )
-        self.assertEqual(started.returncode, 0, started.stderr)
-        self.wait_for_disabled(task_name)
-        _, launch_log = self.wait_for_launch_log(
-            existing_launch_logs,
-            "task_launch_failed",
-        )
-        self.assertIn("task_disabled", launch_log)
-        self.assertIn("Resume plan is not valid JSON", launch_log)
-        self.assertNotIn("plan_validated", launch_log)
-        self.assertNotIn("controller_invocation_started", launch_log)
 
     def test_launch_envelope_drift_does_not_disable_task(self) -> None:
         plan = self.write_plan(
