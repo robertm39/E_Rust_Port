@@ -471,7 +471,7 @@ function Invoke-LoggedController {
         [string]$ControllerPath,
 
         [Parameter(Mandatory = $true)]
-        [object[]]$ControllerArguments,
+        [hashtable]$ControllerParameters,
 
         [Parameter(Mandatory = $true)]
         [string]$LogPath
@@ -485,7 +485,7 @@ function Invoke-LoggedController {
     }
     & $writeLog "controller_invocation_started path=$ControllerPath"
     try {
-        & $ControllerPath @ControllerArguments *>&1 | ForEach-Object {
+        & $ControllerPath @ControllerParameters *>&1 | ForEach-Object {
             $text = [string]$_
             if (-not [string]::IsNullOrEmpty($text)) {
                 & $writeLog "controller_output $text"
@@ -582,9 +582,15 @@ if ($Launch) {
         )
 
         $controllerArguments = @($validatedPlan.controller_arguments)
+        $controllerParameters = @{}
+        for ($index = 0; $index -lt 12; $index += 2) {
+            $name = $controllerArguments[$index].Substring(1)
+            $controllerParameters[$name] = $controllerArguments[$index + 1]
+        }
+        $controllerParameters["Execute"] = $true
         Invoke-LoggedController `
             -ControllerPath $validatedPlan.controller_path `
-            -ControllerArguments $controllerArguments `
+            -ControllerParameters $controllerParameters `
             -LogPath $launchLog
         [IO.File]::AppendAllText(
             $launchLog,

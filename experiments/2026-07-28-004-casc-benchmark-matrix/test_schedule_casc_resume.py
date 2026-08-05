@@ -321,15 +321,22 @@ class CascResumeSchedulerTests(unittest.TestCase):
         )
         failure_script = self.root / "failure-controller.ps1"
         failure_script.write_text(
+            'param([string]$Unused)\n'
             'Write-Output "before-failure"\nthrow "synthetic failure"\n',
             encoding="utf-8",
         )
 
-        def invoke_function(controller: Path, log: Path, *arguments: str):
+        def invoke_function(
+            controller: Path,
+            log: Path,
+            parameters: dict[str, str],
+        ):
             def quote(value: str) -> str:
                 return "'" + value.replace("'", "''") + "'"
 
-            arguments_text = ",".join(quote(value) for value in arguments)
+            parameters_text = ";".join(
+                f"{name}={quote(value)}" for name, value in parameters.items()
+            )
             command = (
                 "$ErrorActionPreference='Stop'; $tokens=$null; $errors=$null; "
                 f"$ast=[Management.Automation.Language.Parser]::ParseFile({quote(str(SCRIPT))},"
@@ -340,12 +347,13 @@ class CascResumeSchedulerTests(unittest.TestCase):
                 "if($definition.Count -ne 1){throw 'function definition mismatch'}; "
                 "Invoke-Expression $definition[0].Extent.Text; "
                 f"Invoke-LoggedController -ControllerPath {quote(str(controller))} "
-                f"-ControllerArguments @({arguments_text}) -LogPath {quote(str(log))}"
+                f"-ControllerParameters @{{{parameters_text}}} "
+                f"-LogPath {quote(str(log))}"
             )
             return self.powershell(command)
 
         success_log = self.root / "success.log"
-        succeeded = invoke_function(success_script, success_log, "exact")
+        succeeded = invoke_function(success_script, success_log, {"Value": "exact"})
         self.assertEqual(succeeded.returncode, 0, succeeded.stderr)
         success_text = success_log.read_text(encoding="utf-8")
         self.assertIn("controller_invocation_started", success_text)
@@ -354,7 +362,11 @@ class CascResumeSchedulerTests(unittest.TestCase):
         self.assertNotIn("controller_invocation_failed", success_text)
 
         failure_log = self.root / "failure.log"
-        failed = invoke_function(failure_script, failure_log, "unused")
+        failed = invoke_function(
+            failure_script,
+            failure_log,
+            {"Unused": "unused"},
+        )
         self.assertNotEqual(failed.returncode, 0)
         self.assertTrue(
             failure_log.is_file(),

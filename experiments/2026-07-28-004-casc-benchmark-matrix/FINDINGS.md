@@ -1063,10 +1063,9 @@ and returned task result 1 before provisioning.  At the first post-trigger
 audit there was no matching controller process or controller log, no active or
 parked runner, and no new artifact.  A direct nonexecuting controller plan
 subsequently revalidated the archive, count, campaign state, and every immutable
-input.  The sole worktree difference was Beads exporting the completed
-`E_Rust_Port-9jt.2.7.6` row over the stale committed `in_progress` JSONL row.
-That is consistent with the controller's clean-worktree preflight rejecting the
-launch before its log is created; no provider contact occurred.
+input.  Beads also exported the completed `E_Rust_Port-9jt.2.7.6` row over its
+stale committed `in_progress` JSONL row, but that was not yet sufficient to
+attribute the launch failure; no provider contact occurred.
 
 The scheduled launcher now creates a unique ignored launch log before checking
 or disabling the task.  It records the task and plan hash, the successful
@@ -1077,6 +1076,16 @@ execute synthetic successful and failing controllers and prove both terminal
 records; the real Task Scheduler test proves a deliberately invalid checkpoint
 still self-disables before controller execution while preserving the complete
 failure chain.  Test-created tasks and logs are removed afterward.
+
+The first logged retry then supplied the missing exact failure: array splatting
+treated the validated `-Flag, value` sequence as positional arguments, binding
+`j13` to `CheckpointSha256`.  This is also the cause of the original silent
+task result 1; it fails during PowerShell parameter binding, before the
+controller body and its clean-worktree check.  The scheduler now reconstructs
+a named-parameter hashtable from the already-validated six flag/value pairs and
+sets `Execute` as a switch before invocation.  Synthetic hashtable-bound success
+and failure tests plus the real invalid-checkpoint task path cover the corrected
+binding without permitting unvalidated parameters.
 
 ## Remaining acceptance boundary
 
