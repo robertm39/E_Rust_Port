@@ -1268,6 +1268,32 @@ The launch task is disabled with result zero, its controller process is absent,
 and its terminal log ends with `controller_invocation_completed` and
 `task_launch_completed`.
 
+## Active successor from the 1,663-result checkpoint
+
+After checkpoint evidence was pushed at root commit `1aac2811`, the auto
+planner revalidated 1,663/2,700 J13 results and observed 270,000 monthly
+allowance seconds at `2026-08-06T03:00:58Z`, enough for the complete 14,700
+second service ceiling.  Ignored plan
+`.artifacts/casc-benchmark/j13-1663-next-resume-plan-260806.json` has SHA-256
+`5aa305d9cef92828b0714ac43b75bccac917cf6ce8e90de53681d34b6ce94aea`.
+Its hidden, limited-interactive task
+`Umlaut-CASC-J13-Resume-20260806T030558Z` passed exact audit, triggered once at
+`03:05:58Z`, disabled itself before the controller, and revalidated the plan
+before provider contact.
+
+The controller rechecked allowance and provisioned exactly one successor:
+runner `260806-030618-c092`, Linode `102354657`, firewall `108358859`.
+Package-maintenance quiescence SHA-256 is
+`b3001f3770b878f1f2a067316fa3e2897318862a16c3932ddd8f4e58160f8877`;
+the 4,184-file source snapshot binds root commit `1aac2811` and archive SHA-256
+`6e17f0ff8e7a5fcb3019181a73078a90908fb0f7307c16c34273f110d9a84f4e`.
+All four frozen inputs uploaded, the 1,663-result restore and immutable-contract
+preflight passed, and service
+`casc-j13-v2-resume-260806-030618-c092.service` started with MainPID `3994`,
+invocation `c20d2f53498c421bbbe379b43519f547`, and zero restarts.  The task is
+disabled-but-running and retains controller ownership until the next validated
+checkpoint.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
