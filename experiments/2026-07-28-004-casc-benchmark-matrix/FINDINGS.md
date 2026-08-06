@@ -1205,6 +1205,69 @@ running with MainPID `3971`, invocation
 than its restored checkpoint.  Linode `102345835` remained running behind
 enabled firewall `107959971`, with no parked resources.
 
+## Verified J13 checkpoint at 1,663 results
+
+The guarded successor finished without a restart at
+`2026-08-06T02:53:23Z`.  The unloaded-unit journal proof binds MainPID `3971`,
+invocation `e9bbde41c8894c82ae538eb646535ed9`, boot
+`628b5ced1b50438180f2ce79d982084c`, and success sequence `13240` to the exact
+service.  Its terminal summary reconciles 1,531 resumed plus 132 new results
+to 1,663 total.  Capture found no result-less stdout/stderr pair, regenerated
+the partial J13 and combined reports, and found no solver unit or cgroup
+residue.
+
+The downloaded ignored archive is
+`.artifacts/casc-benchmark/j13-checkpoint-260805-224055-fa64.tar.gz`: 22,680,371
+bytes, SHA-256
+`1d6d2934ab0e15c635148eab6c7ae7478f6f321b7b2bfce8488e4580d41ad3c8`.
+Its 13-member outer envelope binds a 1,663-path inventory SHA-256
+`ffacfcd883f8b3ad4c7f0ef0d0433c4368bf17ecae06997b9f5b65def5bdc2ca`.
+The inner archive has 5,073 regular members and SHA-256
+`bf8c646240150681702d2b1aa8c18687b23f6b4a6fcc24d661fe46d11320023f`.
+Strict validation reproduces contract
+`9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676`,
+832 Umlaut plus 831 Vampire records, 1,663/2,700 J13 results, 0/5,802
+CASC-2025 results, and 1,663/8,502 combined results.  The J13 and combined
+summary hashes are respectively
+`76480c60f72cf9b9a6d07e57dfd1dc130c99c07b7c9e68001bfe0f386f15d976`
+and `986dfa42c19f8586b7ebef816849c35f771296e6f76cfae090adab25258510b6`.
+
+The controller sidecar and a separately invoked full validator are
+byte-identical, both SHA-256
+`1d0f108b0b9763258af8e553a300df7b710ff958326c843b0fd20af8de68cf2d`.
+Reproduction from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -u `
+  experiments/2026-07-28-004-casc-benchmark-matrix/validate_casc_checkpoint.py `
+  --archive .artifacts/casc-benchmark/j13-checkpoint-260805-224055-fa64.tar.gz `
+  --archive-sha256 1d6d2934ab0e15c635148eab6c7ae7478f6f321b7b2bfce8488e4580d41ad3c8 `
+  --manifest benchmarks/casc_2026_manifest.jsonl `
+  --run-name casc-j13-2026-089e06c8-v2 `
+  --contract-id 9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676 `
+  --expected-results 1663 `
+  --combined-run CASC-2025 benchmarks/casc_2025_manifest.jsonl `
+    casc30-2025-089e06c8-v2 `
+    e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa `
+  --combined-run CASC-J13 benchmarks/casc_2026_manifest.jsonl `
+    casc-j13-2026-089e06c8-v2 `
+    9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676 `
+  --output .artifacts/casc-benchmark/j13-checkpoint-260805-224055-fa64.tar.gz.independent-validation.json
+.\.venv\Scripts\python.exe -u `
+  experiments/2026-07-28-004-casc-benchmark-matrix/plan_next_casc_resume.py `
+  --checkpoint .artifacts/casc-benchmark/j13-checkpoint-260805-224055-fa64.tar.gz `
+  --checkpoint-sha256 1d6d2934ab0e15c635148eab6c7ae7478f6f321b7b2bfce8488e4580d41ad3c8 `
+  --inspect-only
+```
+
+The inspect-only campaign gate selects outer/next release `j13` at exactly
+1,663 results, leaving 1,037 J13 records before any CASC-2025 transition.
+After `checkpoint_verified`, the controller deleted Linode `102345835` and
+firewall `107959971`; read-only runner state is `active: null, parked: []`.
+The launch task is disabled with result zero, its controller process is absent,
+and its terminal log ends with `controller_invocation_completed` and
+`task_launch_completed`.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
