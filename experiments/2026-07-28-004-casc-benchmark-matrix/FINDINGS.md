@@ -1460,6 +1460,54 @@ safe provider teardown.  This accepts only the recovered slice.  The matrix
 Bead remains in progress because 6,647 of 8,502 records are still missing; a
 future guarded slice must continue J13 before any CASC-2025 transition.
 
+## Active successor from the 1,855-result checkpoint
+
+After the validated checkpoint evidence was pushed at root commit `5e20f577`,
+the auto planner selected J13 at exactly 1,855/2,700 results.  Ignored plan
+`.artifacts/casc-benchmark/j13-1855-next-resume-plan-260806.json` has SHA-256
+`c06a375acda274839ae501f7f2b877cd7639762d94b12f2c2d1b475db1677ba4`.
+It observed 252,000 remaining monthly allowance seconds at
+`2026-08-06T07:30:24Z`, exceeding the complete 14,700-second launch guard, and
+specified the exact validated archive, SHA-256, initial count 1,855, and
+14,400-second batch wall.
+
+The hidden, limited-interactive task
+`Umlaut-CASC-J13-Resume-20260806T073524Z` triggered once at `07:35:24Z`,
+disabled itself before invoking the controller, and revalidated the plan hash.
+Launch log
+`.artifacts/casc-benchmark/scheduled-launch-j13-20260806T073525Z-11180.log`
+and controller log
+`.artifacts/casc-benchmark/j13-resume-controller-20260806T073545Z-11180.log`
+preserve the handoff.  The controller independently rechecked 252,000 seconds
+of allowance before provider contact and provisioned exactly one successor:
+runner `260806-073551-6bd0`, Linode `102365031`, firewall `108778464`, on
+`g7-highmem-8` in `us-ord`.  Its unattended-maintenance quiescence record has
+SHA-256
+`ace42ca792260ccde8c045ca233be6265f721033fbaaf31ae7c0e8857740758b`.
+
+The 4,184-file clean-main source snapshot has SHA-256
+`25b62d1b10bf543b68e9b37987e2d341ae495ddd9afccdf51dfc27d02a8533d6`.
+The controller uploaded and hash-verified that snapshot, the exact CASC-J13
+corpus, checkpoint
+`c9f54dadfab3e28f95e1d6d0fd8b16d474e0dbc5d6ac6d27dc6dc00cc313d012`,
+frozen Umlaut `4e87dac3`, and pinned Vampire `5.0.1`.  Safe extraction verified
+1,350 problems and 2,438 axioms.  All outer checkpoint members and the nested
+archive verified, the restored summary/contract/result inventory reconciled
+exactly to 1,855, and the immutable contract plus strict cgroup-v2 preflight
+passed.
+
+At `2026-08-06T07:46:12Z`, service
+`casc-j13-v2-resume-260806-073551-6bd0.service` started with MainPID `3991`,
+invocation `7fcddd3bf79048408785da9a713e2ba0`, and zero restarts.  A second exact
+identity read remained loaded and active/running with the same PID and
+invocation, `NRestarts=0`, and the untouched 1,855-result starting inventory.
+This falsifies a partial restore, duplicate restart, or preflight bypass at the
+handoff.  It does not accept the new slice: the scheduled task and controller
+retain sole ownership until terminal capture, independent validation,
+zero-residue evidence, and provider teardown complete.  The first ordinary
+controller poll retained the exact service identity and advanced the inventory
+to 1,858, confirming useful work without a restart.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
