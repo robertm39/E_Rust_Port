@@ -1508,6 +1508,77 @@ zero-residue evidence, and provider teardown complete.  The first ordinary
 controller poll retained the exact service identity and advanced the inventory
 to 1,858, confirming useful work without a restart.
 
+## Partial-checkpoint Umlaut failure audit
+
+Question: do the 77 Umlaut `error`/`crash` classifications in the independently
+validated 1,855-result checkpoint represent only the already fixed THF parser
+cohort, or do they expose distinct follow-up defects?  The exact checkpoint
+archive and nested run were extracted locally under
+`C:\tmp\umlaut-j13-analysis-260806-0809`.  PowerShell parsed all 928 completed
+Umlaut result JSON files, grouped non-success records by independently recorded
+stderr SHA-256, read the referenced streams, and reconciled the groups to the
+summary's 76 errors plus one crash.
+
+Seventy-three exit-3 records have identical stderr SHA-256
+`9c8ffe4f988b015afb5af4f2652f14a13055ebff43ae502cd5c09cefa776caee`
+and `Too many arguments applied to the term`.  They exactly match the 73-input
+frozen-binary cohort already repaired and comprehensively validated by
+`E_Rust_Port-9jt.2.11`; they are immutable historical results, not a regression
+in current `main`.  One frozen-binary exit-4 record, `ITP185^1`, was also
+accepted by that Bead's final current-main 398/400 audit.
+
+The remaining two errors are `SYO544^1` and `SYO545^1`, with identical stderr
+SHA-256
+`83ba21216b656fa5a8d845d022050ff8696547761c6cf578eac2d78f4bd603ba`
+and `Boolean formula equality requires Boolean right operand`.  They are the
+same two inputs still rejected by the final current-main THF audit.  Both
+compare values of complete sort `$o > $o`, including equality against a
+constant-false lambda and negation, and both are solved by multiple official
+J13 entrants.
+This distinct type-dispatch gap is now tracked by bug
+`E_Rust_Port-9jt.2.14` with a 400/400 THF acceptance boundary.
+
+The crash is new: result
+`casc-runs/casc-j13-2026-089e06c8-v2/results/umlaut/fnq/0925-fnq-e124691e4d3d.json`
+binds `HWV063+1`, input SHA-256
+`dc8bd86b5fa21351ee69b677f051699866d25c1aa0ab848d0b4fe016bfc234b3`,
+return code `-6`, 0.068215 CPU seconds, 0.261169348 wall seconds, 22.359375 MiB
+peak memory, no cgroup memory event, no cleanup requirement, empty stdout, and
+stderr SHA-256
+`ab030f25249d0efcdbccacf45bf97dc0385148a3227420c19eaa1a62f0baacd8`.
+The referenced stderr says the Rust main thread overflowed its stack and then
+aborted.  Exact source analysis found 4,148,434 bytes and 182,709 lines, three
+quantifier lists containing 332, 4, and 32,896 variables, 77,655 conjunctions,
+105,044 disjunctions, but only four levels of textual parenthesis nesting.
+That falsifies a cgroup/resource-limit classification and literal deep source
+nesting; it does not yet identify which recursive parser or AST traversal
+overflows.  Bug `E_Rust_Port-9jt.2.13` requires a clean current-main Ubuntu
+reproduction, root-cause isolation, an iterative or explicitly bounded fix,
+and a compact synthetic regression rather than a larger process stack.
+
+Representative reproduction from the repository root:
+
+```powershell
+tar.exe -xzf `
+  .artifacts/casc-benchmark/j13-checkpoint-260806-030618-c092.tar.gz `
+  -C C:\tmp\umlaut-j13-analysis-260806-0809 `
+  j13-checkpoint-260806-030618-c092/casc-runs.tar.gz
+tar.exe -xzf `
+  C:\tmp\umlaut-j13-analysis-260806-0809\j13-checkpoint-260806-030618-c092\casc-runs.tar.gz `
+  -C C:\tmp\umlaut-j13-analysis-260806-0809 `
+  casc-runs/casc-j13-2026-089e06c8-v2
+Get-FileHash -Algorithm SHA256 `
+  'problems/casc_2026/FNQ/HWV063+1.p'
+rg -n 'SYO544\^1|SYO545\^1' cast_2026_results
+```
+
+Conclusion: the immutable partial matrix has already separated known historical
+parser evidence from two actionable current gaps.  Neither new Bead is claimed
+fixed: the active CASC controller owns the only Ubuntu Linode, so current-main
+execution is deliberately deferred until the guarded slice checkpoints and
+tears down.  The live slice itself remained on the same PID/invocation with
+zero restarts throughout this local audit.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
