@@ -1359,6 +1359,107 @@ This proves an exact, no-restart ownership transfer after a transport-only
 failure.  It does not accept the active slice: checkpoint capture, independent
 validation, zero-residue proof, and provider deletion remain outstanding.
 
+## Verified recovered J13 checkpoint at 1,855 results
+
+Question: did the transport-recovered controller preserve the original solver
+process through a valid successor checkpoint, and is that checkpoint safe to
+resume after independent validation and provider teardown?  The adopted service
+finished successfully at `2026-08-06T07:18:57Z`.  Its terminal journal binds
+MainPID `3994`, invocation `c20d2f53498c421bbbe379b43519f547`, boot
+`813e80b2f2f04b2185e7dc93de3f159d`, and success sequence `20006` to the exact
+unit.  The batch's terminal message reconciles 1,663 resumed plus 192 new
+results to 1,855.  It had zero restarts and unloaded as inactive/dead with
+`Result=success` and `ExecMainStatus=0`.
+
+Capture removed no incomplete result artifact, regenerated both per-release
+summaries and the combined report, and found no surviving solver unit or cgroup.
+The ignored archive is
+`.artifacts/casc-benchmark/j13-checkpoint-260806-030618-c092.tar.gz`: 28,228,858
+bytes, SHA-256
+`c9f54dadfab3e28f95e1d6d0fd8b16d474e0dbc5d6ac6d27dc6dc00cc313d012`.
+Its 13 regular outer members bind a unique, sorted 1,855-path result inventory,
+SHA-256
+`b83242ab8bd09866f1206d9a3d23aecd3bd34246d905c6fd27053cf8a3261c0a`.
+The nested archive is 44,528,377 bytes with 5,651 regular members and SHA-256
+`94634baf50b23a80f39561a18997bc56b3ea4731539b65a9775aabb8c6213063`.
+
+Strict validation reproduces contract
+`9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676`,
+928 Umlaut plus 927 Vampire records, 1,855/2,700 J13 results, 0/5,802
+CASC-2025 results, and 1,855/8,502 combined results.  The J13 and combined
+summary hashes are respectively
+`2d6af8c69b475a245ffb4bfe69cb38787bc1e48f4d28e7f0f644c220172dfb2e`
+and `2f6c1de861d9b51a08271fb82c7f7399ac7f57d4cfbbf9d2b40cdd5700ab5e68`.
+Both solvers retain classification/status counts, time curves, and
+category/division/split/difficulty/overall coverage with CPU, wall-time, and
+peak-memory distributions.  Overlap retains both/unique/neither/incomplete
+counts, status pairs, and polarity checks.  The combined report contains both
+releases, all 4,251 targeted problems, 40 plus 26 contextual official CSVs, and
+the explicit warning that local runs do not reproduce official StarExec
+entries.
+
+The controller sidecar and a separately invoked validator are byte-identical:
+2,326 bytes and SHA-256
+`3f0d94890bcc0abf771ebf35b86b4ec8a60fe1fe8536701d5530db252a9107d6`.
+Reproduction from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -u `
+  experiments/2026-07-28-004-casc-benchmark-matrix/validate_casc_checkpoint.py `
+  --archive .artifacts/casc-benchmark/j13-checkpoint-260806-030618-c092.tar.gz `
+  --archive-sha256 c9f54dadfab3e28f95e1d6d0fd8b16d474e0dbc5d6ac6d27dc6dc00cc313d012 `
+  --manifest benchmarks/casc_2026_manifest.jsonl `
+  --run-name casc-j13-2026-089e06c8-v2 `
+  --contract-id 9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676 `
+  --expected-results 1855 `
+  --combined-run CASC-2025 benchmarks/casc_2025_manifest.jsonl `
+    casc30-2025-089e06c8-v2 `
+    e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa `
+  --combined-run CASC-J13 benchmarks/casc_2026_manifest.jsonl `
+    casc-j13-2026-089e06c8-v2 `
+    9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676 `
+  --output .artifacts/casc-benchmark/j13-checkpoint-260806-030618-c092.tar.gz.independent-validation.json
+.\.venv\Scripts\python.exe -u `
+  experiments/2026-07-28-004-casc-benchmark-matrix/plan_next_casc_resume.py `
+  --checkpoint .artifacts/casc-benchmark/j13-checkpoint-260806-030618-c092.tar.gz `
+  --checkpoint-sha256 c9f54dadfab3e28f95e1d6d0fd8b16d474e0dbc5d6ac6d27dc6dc00cc313d012 `
+  --inspect-only
+tar.exe -tzf `
+  .artifacts/casc-benchmark/j13-checkpoint-260806-030618-c092.tar.gz
+tar.exe -xOzf `
+  .artifacts/casc-benchmark/j13-checkpoint-260806-030618-c092.tar.gz `
+  j13-checkpoint-260806-030618-c092/SHA256SUMS
+.\linode-runner.ps1 status
+```
+
+As a falsification check independent of the validator summary, the nested
+archive was extracted under
+`C:\tmp\umlaut-casc-audit-260806-030618-c092`.  PowerShell enumerated 1,855
+unique solver/problem coordinates, matched their exact paths to the outer
+inventory, independently hashed all 3,710 referenced stdout/stderr streams,
+and found zero missing, mismatched, duplicate, or orphan stream.  Twenty-five
+historical result records say `orphan_cleanup_required=true`; this is evidence
+that their per-run cgroups required cleanup, not that residue survived capture.
+The independently hashed outer `cgroup-residue.txt` and `solver-units.txt` are
+both empty, and `processes.txt` contains no batch, Umlaut, or Vampire process.
+All 14 session records are present.  Package maintenance remains bound to
+quiescence record SHA-256
+`b3001f3770b878f1f2a067316fa3e2897318862a16c3932ddd8f4e58160f8877`.
+
+Only after `checkpoint_verified` did the controller delete Linode `102354657`
+and firewall `108358859`.  A fresh read-only provider query returns
+`active: null, parked: []`.  The self-cleaning recovery task is absent,
+controller PID `16036` is absent, and its launch log ends with
+`controller_invocation_completed` followed by `task_launch_completed`.
+The inspect-only campaign gate independently selects outer/next release `j13`
+at exactly 1,855 results, leaving 845 J13 and all 5,802 CASC-2025 records.
+
+Conclusion: the no-restart ownership transfer produced a complete, internally
+consistent, quiescent, independently reproducible successor checkpoint and
+safe provider teardown.  This accepts only the recovered slice.  The matrix
+Bead remains in progress because 6,647 of 8,502 records are still missing; a
+future guarded slice must continue J13 before any CASC-2025 transition.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
