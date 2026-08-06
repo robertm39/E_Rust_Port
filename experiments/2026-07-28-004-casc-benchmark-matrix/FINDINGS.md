@@ -1294,6 +1294,71 @@ invocation `c20d2f53498c421bbbe379b43519f547`, and zero restarts.  The task is
 disabled-but-running and retains controller ownership until the next validated
 checkpoint.
 
+## Transport-only controller recovery at 1,776 results
+
+Question: can a bounded SSH probe failure transfer controller ownership without
+restarting the solver, accepting weaker identities, or deleting the retained
+provider resources?  The active successor supplied a second real transport
+failure.  Original controller log
+`.artifacts/casc-benchmark/j13-resume-controller-20260806T030612Z-8104.log`
+last observed 1,764 results with MainPID `3994`, invocation
+`c20d2f53498c421bbbe379b43519f547`, and zero restarts.  Its next exact
+`systemctl show` probe timed out locally after 90 seconds at
+`2026-08-06T05:39:05Z`.  The controller logged `controller_failed` and
+`runner_retained_for_recovery`; it did not capture a checkpoint or delete
+Linode `102354657` or firewall `108358859`.
+
+A separate bounded read-only probe returned immediately and falsified a
+service failure: the exact unit remained loaded, active/running, MainPID
+`3994`, invocation `c20d2f53498c421bbbe379b43519f547`, `NRestarts=0`, and
+success status.  Its result inventory had advanced to 1,776.  The strict local
+planner independently revalidated parent checkpoint
+`.artifacts/casc-benchmark/j13-checkpoint-260805-224055-fa64.tar.gz`, SHA-256
+`1d6d2934ab0e15c635148eab6c7ae7478f6f321b7b2bfce8488e4580d41ad3c8`,
+as the exact 1,663-result J13 resume candidate.
+
+Recovery used hidden, limited-interactive task
+`Umlaut-CASC-J13-Recovery-20260806T054137Z`.  Its ignored wrapper
+`.artifacts/casc-benchmark/recover-j13-20260806T054137Z.ps1` parses without a
+PowerShell error and hashes to
+`ecdaada7edccc7ca7e095a3530a226d55fbb6446e76dabb035b239bc515ad2a9`.
+Before controller invocation it disabled its own exact task and required clean
+synchronized `main`.  Registration audit proved a hidden PowerShell action,
+the exact wrapper and working directory, current-user `Interactive`/`Limited`
+principal, network/wake/start-available settings, `IgnoreNew`, five-minute
+one-day retries, and an eight-hour ceiling.  The forced first start showed the
+task disabled while its recovery process remained running.
+
+Recovery controller log
+`.artifacts/casc-benchmark/j13-resume-controller-20260806T054259Z-16036.log`
+verified 259,200 remaining allowance seconds against the complete 14,700-second
+ceiling, then required the exact runner, unit, MainPID, invocation, zero
+restarts, complete `ExecStart`, all four uploaded hashes, frozen contract-file
+hash, absent successor paths, and a result count strictly after the parent.
+Only after every gate passed did it record `existing_service_adopted` at 1,776
+results.  Launch log
+`.artifacts/casc-benchmark/scheduled-recovery-j13-20260806T054137Z-16036.log`
+preserves the wrapper handoff.  The next ordinary poll advanced to 1,778 with
+the same service identity.
+
+Exact read-only diagnosis and local validation commands were:
+
+```powershell
+.\linode-runner.ps1 status
+.\linode-runner.ps1 exec --timeout-seconds 90 -- `
+  "systemctl show casc-j13-v2-resume-260806-030618-c092.service --property=LoadState,ActiveState,SubState,MainPID,InvocationID,NRestarts,Result,ExecMainStatus"
+.\linode-runner.ps1 exec --timeout-seconds 90 -- `
+  "find /opt/e-rust-port/casc-runs/casc-j13-2026-089e06c8-v2/results -type f -name '*.json' | wc -l"
+python experiments/2026-07-28-004-casc-benchmark-matrix/plan_next_casc_resume.py `
+  --inspect-only `
+  --checkpoint .artifacts/casc-benchmark/j13-checkpoint-260805-224055-fa64.tar.gz `
+  --checkpoint-sha256 1d6d2934ab0e15c635148eab6c7ae7478f6f321b7b2bfce8488e4580d41ad3c8
+```
+
+This proves an exact, no-restart ownership transfer after a transport-only
+failure.  It does not accept the active slice: checkpoint capture, independent
+validation, zero-residue proof, and provider deletion remain outstanding.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
