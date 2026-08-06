@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run bounded proving probes for J13 THF syntax failures from an audit."""
+"""Run bounded proving probes for selected J13 THF audit classifications."""
 
 from __future__ import annotations
 
@@ -18,6 +18,13 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from audit_j13_thf_syntax import canonical_json, load_thf_records, sha256_file
+
+SELECTION_CLASSIFICATIONS = (
+    "accepted",
+    "error",
+    "timeout",
+    "too_many_arguments",
+)
 
 
 def decoded_output(value: str | bytes | None) -> str:
@@ -44,6 +51,28 @@ def classify(
     if statuses:
         return "entered_proving"
     return "no_terminal_status"
+
+
+def select_problem_ids(
+    selection: dict[str, Any],
+    classifications: set[str],
+    expected_count: int | None,
+) -> list[str]:
+    selected_ids = [
+        result["problem_id"]
+        for result in selection.get("results", [])
+        if result.get("classification") in classifications
+    ]
+    if not selected_ids:
+        selected = ", ".join(sorted(classifications))
+        raise ValueError(f"selection audit contains no {selected} records")
+    if expected_count is not None and len(selected_ids) != expected_count:
+        raise ValueError(
+            f"selection count mismatch: {len(selected_ids)} != {expected_count}"
+        )
+    if len(set(selected_ids)) != len(selected_ids):
+        raise ValueError("selection audit contains duplicate selected identifiers")
+    return selected_ids
 
 
 def run_problem(
@@ -114,6 +143,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--memory-limit-mib", type=int, default=2048)
     parser.add_argument("--timeout-seconds", type=float, default=15.0)
     parser.add_argument("--source-snapshot-sha256", required=True)
+    parser.add_argument(
+        "--selection-classification",
+        action="append",
+        choices=SELECTION_CLASSIFICATIONS,
+        help=(
+            "audit classification to probe; repeat to select more than one "
+            "(default: too_many_arguments)"
+        ),
+    )
+    parser.add_argument("--expected-selection-count", type=int)
     parser.add_argument("--require-all-entered", action="store_true")
     return parser.parse_args(argv)
 
@@ -126,6 +165,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("memory limit must be at least 20 MiB")
     if arguments.timeout_seconds <= arguments.cpu_limit_seconds:
         raise ValueError("external timeout must exceed the CPU limit")
+    if (
+        arguments.expected_selection_count is not None
+        and arguments.expected_selection_count <= 0
+    ):
+        raise ValueError("expected selection count must be positive")
     if re.fullmatch(r"[0-9a-f]{64}", arguments.source_snapshot_sha256) is None:
         raise ValueError("source snapshot SHA-256 must be 64 lowercase hex digits")
 
@@ -150,15 +194,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("selection input is not a J13 THF syntax audit")
     if selection.get("manifest", {}).get("sha256") != sha256_file(manifest):
         raise ValueError("selection audit manifest hash does not match")
-    selected_ids = [
-        result["problem_id"]
-        for result in selection.get("results", [])
-        if result.get("classification") == "too_many_arguments"
-    ]
-    if not selected_ids:
-        raise ValueError("selection audit contains no overapplication failures")
-    if len(set(selected_ids)) != len(selected_ids):
-        raise ValueError("selection audit contains duplicate selected identifiers")
+    selected_classifications = set(
+        arguments.selection_classification or ["too_many_arguments"]
+    )
+    selected_ids = select_problem_ids(
+        selection,
+        selected_classifications,
+        arguments.expected_selection_count,
+    )
 
     corpus_root = (problem_root / metadata["sources"]["corpus_root"]).resolve(
         strict=True
@@ -213,6 +256,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "probe_script": {"path": str(probe_script), "sha256": sha256_file(probe_script)},
         "results": results,
         "schema_version": 1,
+        "selection_classifications": sorted(selected_classifications),
         "selection_audit": {
             "path": str(selection_path),
             "sha256": sha256_file(selection_path),

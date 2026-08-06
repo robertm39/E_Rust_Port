@@ -1699,7 +1699,7 @@ parser then built the 77,656-operand conjunction as a left-associated binary
 tree, and the first represented formula preprocessing passes recursively
 descended both that tree and the complete quantifier prefix.
 
-The unvalidated current working-tree draft addresses the complete exact-input
+The implemented working-tree change addresses the complete exact-input
 route rather than only the first observed recursion.  TSTP and old-TPTP binder
 lists are parsed in a loop with one lexical variable environment and scoped
 declaration per binder, then reverse-wrapped into the same quantifier order.
@@ -1737,18 +1737,74 @@ git diff --check
 bd show E_Rust_Port-9jt.2.13 --json
 ```
 
-Limit: this is static evidence, not acceptance evidence.  The active CASC
-controller still owns the only Ubuntu runner.  Exact current-main execution,
-focused and comprehensive tests, source/binary identities, time and peak
-memory, semantic/proof-output regressions, and any later runtime hazard remain
-pending a validated successor checkpoint and verified provider teardown.
+### Ubuntu acceptance evidence
 
-Conclusion: the immutable partial matrix has already separated known historical
-parser evidence from two actionable current gaps.  Neither new Bead is claimed
-fixed: the active CASC controller owns the only Ubuntu Linode, so current-main
-execution is deliberately deferred until the guarded slice checkpoints and
-tears down.  The live slice itself remained on the same PID/invocation with
-zero restarts throughout this local audit.
+The verified 2,352-result checkpoint freed the ordinary Ubuntu runner for
+acceptance without touching the completed high-memory campaign provider.  The
+final source content was uploaded from base commit `8ae429bf231583cbacf8669272805db3b6bff2ee`
+as 4,185 files; the final standalone snapshot archive SHA-256 is
+`3b5ed138e04562a3031fc4c5ac10b47d1d4864b7be4531274307c2a265120356`.
+The only changes after the exact THF and HWV runs were two targeted Clippy
+allowances and one panic-contract documentation paragraph, so their executable
+formula behavior is identical to the finally lint-clean source.
+
+Strict THF validation accepted all 400 untouched J13 THF inputs.  Audit JSON
+`.artifacts/casc-benchmark/j13-thf-syntax-after-equality-56454706.json` has
+SHA-256 `c56ad8283a75f1ceed8f99f12f672d7cf2e2a050ad2358cd6b36a83e01b552b8`.
+The production proving probe selected exactly `SYO544^1` and `SYO545^1`; both
+entered proving, and its JSON has SHA-256
+`8e0e5482e8080e0b43684473d074982f71e1699b442b378d42db61157c0227bc`.
+Four pure-Python probe regressions also pass.  This closes the complete 400/400
+boundary for `E_Rust_Port-9jt.2.14` while retaining exact mixed-arrow/scalar
+sort rejection.
+
+Exact `HWV063+1` ran as guarded systemd service
+`umlaut-hwv063-56454706.service`, MainPID `49192`, invocation
+`b43bb3caedb3408bb31c002cc74df208`, and `NRestarts=0`.  The 180.308445811-second
+wall guard deliberately terminated proving after 258.309013 CPU seconds at
+1,997,324,288 bytes (1,904.796875 MiB) peak memory.  All cgroup memory events
+were zero, no orphan cleanup was required, and neither stack-overflow nor abort
+text occurred.  Result JSON SHA-256 is
+`f50a714ea1c4084e35fd9f2882bee35dffb8c065b4179790f0259763ce4e48ed`;
+the complete ignored evidence archive
+`.artifacts/casc-benchmark/hwv063-56454706.tar.gz` has SHA-256
+`4988134fc4a0a283916924ac1f1e9e23d8bba5b9617192a926cd709e6dd193ec`.
+This closes the exact-input boundary for `E_Rust_Port-9jt.2.13` without raising
+the process stack.
+
+The final comprehensive Ubuntu evidence is intentionally composite because the
+outer client guard closed its stdout while the last benchmark was still
+running.  Workload `260806-133651-af34` passed rustfmt, strict
+`cargo clippy --locked --all-targets --all-features -- -D warnings -D
+clippy::pedantic`, all 4,575 library tests plus every binary/integration target,
+debug and release builds, the Windows GNU test/release cross-builds, all
+solution-validator tests, the 50-case main comparison with zero mismatches, and
+the 216-case tool comparison with zero mismatches.  Its preserved bundle
+`.artifacts/casc-benchmark/j13-acceptance-260806-133651-af34.tar.gz` has SHA-256
+`0949f966a7bb9ef958c53069077430227b92e625bc8c740f69d3c6103bf38237`.
+The client-induced Python exit 120 occurred only after benchmark case 7/10;
+the same unchanged source was resynchronized, rebuilt to release binary
+SHA-256 `98cba296a43f7fd1b67d3542c8f10b3e5e3fac65535cf2fcc4c7bbab30793c1b`,
+and rerun with output captured remotely.  All 10 cases and five repetitions
+completed with zero behavior mismatches, aggregate Rust/C wall ratio
+`1.0899385623121118`, and `regression_over_threshold: false`.  The final
+benchmark archive, including JSON and CSV samples, has SHA-256
+`901009a135668c30829f80c0b1caf83740f77b9ee10e79a16170db66fa4230cb`.
+
+Two rejected attempts remain useful negative evidence.  Workload
+`260806-125213-2e95` exposed 12 compatibility regressions that led to restoring
+external-name persistence plus old-TPTP `$let` scalar-sort recovery.  Workload
+`260806-133055-2136` exposed a load-sensitive LTB child-output failure after the
+core suite; the exact isolated test then passed in 0.48 seconds, and the next
+comprehensive workload passed it in 0.54 seconds.  No failing attempt was used
+as acceptance evidence.  The ordinary runner finished parked with no active
+lease and its remote reaper armed.
+
+Conclusion: the immutable partial matrix separated historical frozen-binary
+failures from two actionable current gaps, and both gaps now have focused,
+exact-input, and comprehensive acceptance evidence.  This does not complete
+the campaign: J13 still lacks 348 records and must resume from the verified
+2,352-result checkpoint before CASC-2025 starts.
 
 ## Remaining acceptance boundary
 

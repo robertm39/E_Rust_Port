@@ -5236,6 +5236,43 @@ fn tformula_replace_eqn_with_equiv(bank: &mut TermBank, form: &Term) -> Result<T
         return Ok(form.clone());
     }
 
+    let (qex_code, qall_code) = {
+        let signature = bank.signature();
+        (signature.qex_code(), signature.qall_code())
+    };
+    if form.f_code() == qex_code || form.f_code() == qall_code {
+        let mut prefix = Vec::new();
+        let mut matrix = form.clone();
+        while matrix.f_code() == qex_code || matrix.f_code() == qall_code {
+            prefix.push(matrix.clone());
+            matrix = matrix
+                .argument(1)
+                .expect("quantified formula must have a body argument");
+        }
+
+        let mut current = tformula_replace_eqn_with_equiv(bank, &matrix)?;
+        for original in prefix.iter().rev() {
+            let original_body = original
+                .argument(1)
+                .expect("quantified formula must have a body argument");
+            if current == original_body {
+                current = original.clone();
+            } else {
+                let copy = Term::top_copy_without_args(original);
+                copy.set_argument(
+                    0,
+                    original
+                        .argument(0)
+                        .expect("quantified formula must have a variable argument"),
+                );
+                copy.set_argument(1, current);
+                let copy = bank.term_top_insert(copy)?;
+                current = rewrite_bool_eqn_root(bank, &copy)?;
+            }
+        }
+        return Ok(current);
+    }
+
     let copy = Term::top_copy_without_args(form);
     for (index, arg) in form.argument_clones().into_iter().enumerate() {
         let arg = arg.unwrap_or_else(|| panic!("formula argument {index} is uninitialized"));
@@ -7071,6 +7108,34 @@ mod tests {
             wrapped.derivation_entries(),
             &[DerivationEntry::Operation(DC_EQ_TO_EQ)]
         );
+    }
+
+    #[test]
+    fn replace_eqn_with_equiv_handles_deep_quantifier_prefix_iteratively() {
+        const VARIABLE_COUNT: usize = 16_384;
+
+        let mut bank = test_bank();
+        let variables = (0..VARIABLE_COUNT)
+            .map(|index| {
+                let index = i64::try_from(index).expect("variable index fits i64");
+                typed_var(&bank, -800 - 2 * index)
+            })
+            .collect::<Vec<_>>();
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let mut formula = bool_binary_with_code(
+            &mut bank,
+            eqn_code,
+            &variables[0],
+            &variables[VARIABLE_COUNT - 1],
+        );
+        let qall_code = bank.signature().qall_code();
+        for variable in variables.iter().rev() {
+            formula = tformula_quantor_alloc(&mut bank, qall_code, variable, &formula).unwrap();
+        }
+
+        let replaced = super::tformula_replace_eqn_with_equiv(&mut bank, &formula).unwrap();
+
+        assert_eq!(replaced, formula);
     }
 
     #[test]

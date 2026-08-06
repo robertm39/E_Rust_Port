@@ -48,6 +48,10 @@ const TERMP_MEM: i64 = 4;
 const TERMCELL_DYN_MEM: i64 = TERMCELL_MEM + 4 * TERMARG_MEM;
 const REUSABLE_TOP_CELL_ARITIES: usize = 3;
 const REUSABLE_TOP_CELLS_PER_ARITY: usize = 8;
+// Keep ordinary formulas byte-compatible with the historical left fold while
+// bounding recursion depth for competition inputs with tens of thousands of
+// top-level conjuncts or disjuncts.
+const TSTP_ASSOCIATIVE_BALANCE_THRESHOLD: usize = 1_024;
 
 #[derive(Debug)]
 pub struct TermBank {
@@ -1997,9 +2001,10 @@ impl TermBank {
     }
 
     fn tstp_equality_known_term_left(&self, left: &Term) -> bool {
-        !left.is_any_var()
-            && left.type_().as_ref().is_some_and(|type_| !type_.is_bool())
-            && self.sig.is_function(left.f_code())
+        left.type_().as_ref().is_some_and(Type::is_arrow)
+            || (!left.is_any_var()
+                && left.type_().as_ref().is_some_and(|type_| !type_.is_bool())
+                && self.sig.is_function(left.f_code()))
     }
 
     /// Parses one TSTP literal formula, including any higher-order
@@ -2409,15 +2414,31 @@ impl TermBank {
         scanner: &mut Scanner,
         allow_plain_term_atoms: bool,
     ) -> Result<Term, Diagnostic> {
-        let mut formula = self.parse_tformula_tstp_conjunction(scanner, allow_plain_term_atoms)?;
-        while scanner.test_tok(TokenType::FOF_OR) {
-            let op = self.tptp_operator_parse(scanner)?;
-            let right = self.parse_tformula_tstp_conjunction(scanner, allow_plain_term_atoms)?;
-            Self::require_boolean_formula_operand(&formula, "left disjunction operand")?;
-            Self::require_boolean_formula_operand(&right, "right disjunction operand")?;
-            formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
+        let formula = self.parse_tformula_tstp_conjunction(scanner, allow_plain_term_atoms)?;
+        if !scanner.test_tok(TokenType::FOF_OR) {
+            return Ok(formula);
         }
-        Ok(formula)
+        let mut operands = vec![formula];
+        let op = self.tptp_operator_parse(scanner)?;
+        let right = self.parse_tformula_tstp_conjunction(scanner, allow_plain_term_atoms)?;
+        Self::require_boolean_formula_operand(
+            operands.last().expect("disjunction has a left operand"),
+            "left disjunction operand",
+        )?;
+        Self::require_boolean_formula_operand(&right, "right disjunction operand")?;
+        operands.push(right);
+        while scanner.test_tok(TokenType::FOF_OR) {
+            let current_op = self.tptp_operator_parse(scanner)?;
+            debug_assert_eq!(op, current_op);
+            let right = self.parse_tformula_tstp_conjunction(scanner, allow_plain_term_atoms)?;
+            Self::require_boolean_formula_operand(
+                operands.last().expect("disjunction has a left operand"),
+                "left disjunction operand",
+            )?;
+            Self::require_boolean_formula_operand(&right, "right disjunction operand")?;
+            operands.push(right);
+        }
+        self.build_tstp_associative_formula(operands, op)
     }
 
     fn parse_tformula_tstp_conjunction(
@@ -2425,22 +2446,73 @@ impl TermBank {
         scanner: &mut Scanner,
         allow_plain_term_atoms: bool,
     ) -> Result<Term, Diagnostic> {
-        let mut formula = self
-            .parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
-                scanner,
-                allow_plain_term_atoms,
-            )?;
+        let formula = self.parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
+            scanner,
+            allow_plain_term_atoms,
+        )?;
+        if !scanner.test_tok(TokenType::FOF_AND) {
+            return Ok(formula);
+        }
+        let mut operands = vec![formula];
+        let op = self.tptp_operator_parse(scanner)?;
+        let right = self.parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
+            scanner,
+            allow_plain_term_atoms,
+        )?;
+        Self::require_boolean_formula_operand(
+            operands.last().expect("conjunction has a left operand"),
+            "left conjunction operand",
+        )?;
+        Self::require_boolean_formula_operand(&right, "right conjunction operand")?;
+        operands.push(right);
         while scanner.test_tok(TokenType::FOF_AND) {
-            let op = self.tptp_operator_parse(scanner)?;
+            let current_op = self.tptp_operator_parse(scanner)?;
+            debug_assert_eq!(op, current_op);
             let right = self.parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
                 scanner,
                 allow_plain_term_atoms,
             )?;
-            Self::require_boolean_formula_operand(&formula, "left conjunction operand")?;
+            Self::require_boolean_formula_operand(
+                operands.last().expect("conjunction has a left operand"),
+                "left conjunction operand",
+            )?;
             Self::require_boolean_formula_operand(&right, "right conjunction operand")?;
-            formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
+            operands.push(right);
         }
-        Ok(formula)
+        self.build_tstp_associative_formula(operands, op)
+    }
+
+    fn build_tstp_associative_formula(
+        &mut self,
+        mut operands: Vec<Term>,
+        op: FunCode,
+    ) -> Result<Term, Diagnostic> {
+        if operands.len() <= TSTP_ASSOCIATIVE_BALANCE_THRESHOLD {
+            let mut operands = operands.into_iter();
+            let mut formula = operands
+                .next()
+                .expect("an associative formula always has a left operand");
+            for right in operands {
+                formula = self.tformula_fcode_alloc(op, formula, Some(right))?;
+            }
+            return Ok(formula);
+        }
+
+        while operands.len() > 1 {
+            let mut level = Vec::with_capacity(operands.len().div_ceil(2));
+            let mut previous_level = operands.into_iter();
+            while let Some(left) = previous_level.next() {
+                if let Some(right) = previous_level.next() {
+                    level.push(self.tformula_fcode_alloc(op, left, Some(right))?);
+                } else {
+                    level.push(left);
+                }
+            }
+            operands = level;
+        }
+        Ok(operands
+            .pop()
+            .expect("balanced associative formula retains its root"))
     }
 
     fn parse_literal_tformula_tstp_with_applications_with_plain_term_atoms(
@@ -2515,6 +2587,8 @@ impl TermBank {
             }
             scanner.accept_tok(TokenType::NEG_EQUAL_SIGN | TokenType::EQUAL_SIGN)?;
             let right = self.parse_term_real(scanner, true)?;
+            let left = self.recover_untyped_equality_operand(left, &right)?;
+            let right = self.recover_untyped_equality_operand(right, &left)?;
             self.encode_equality_term(left, right, positive)
         } else {
             if self.tformula_atom_can_stay_plain_term(&left) {
@@ -2596,26 +2670,31 @@ impl TermBank {
         scanner: &mut Scanner,
         quantor: FunCode,
     ) -> Result<Term, Diagnostic> {
-        self.vars.push_env();
+        let mut variables = Vec::new();
+        let mut open_environments = 0_usize;
         let parsed = (|| {
-            let variable = self.parse_term_real(scanner, true)?;
-            if !variable.is_free_var() {
-                return Err(Diagnostic::new(
-                    ErrorCode::SYNTAX_ERROR,
-                    "Variable expected, non-variable term found",
-                ));
-            }
-            let rest = if scanner.test_tok(TokenType::COMMA) {
+            loop {
+                self.vars.push_env();
+                open_environments += 1;
+                let variable = self.parse_tptp_quantified_variable(scanner)?;
+                variables.push(variable);
+                if !scanner.test_tok(TokenType::COMMA) {
+                    break;
+                }
                 scanner.accept_tok(TokenType::COMMA)?;
-                self.parse_quantified_tformula_tptp(scanner, quantor)?
-            } else {
-                scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
-                scanner.accept_tok(TokenType::COLON)?;
-                self.parse_elem_tformula_tptp(scanner)?
-            };
-            self.tformula_fcode_alloc(quantor, variable, Some(rest))
+            }
+
+            scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+            scanner.accept_tok(TokenType::COLON)?;
+            let mut formula = self.parse_elem_tformula_tptp(scanner)?;
+            for variable in variables.iter().rev() {
+                formula = self.tformula_fcode_alloc(quantor, variable.clone(), Some(formula))?;
+            }
+            Ok(formula)
         })();
-        self.vars.pop_env();
+        for _ in 0..open_environments {
+            self.vars.pop_env();
+        }
         parsed
     }
 
@@ -2779,21 +2858,9 @@ impl TermBank {
         scanner: &mut Scanner,
         quantor: FunCode,
     ) -> Result<Term, Diagnostic> {
-        self.vars.push_env();
-        let parsed = (|| {
-            let variable = self.parse_tstp_quantified_variable(scanner)?;
-            let rest = if scanner.test_tok(TokenType::COMMA) {
-                scanner.accept_tok(TokenType::COMMA)?;
-                self.parse_quantified_tformula_unit_without_application_tail(scanner, quantor)?
-            } else {
-                scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
-                scanner.accept_tok(TokenType::COLON)?;
-                self.parse_tformula_unit_without_application_tail(scanner)?
-            };
-            self.tformula_fcode_alloc(quantor, variable, Some(rest))
-        })();
-        self.vars.pop_env();
-        parsed
+        self.parse_quantified_tformula_tstp_variables(scanner, quantor, |bank, scanner| {
+            bank.parse_tformula_unit_without_application_tail(scanner)
+        })
     }
 
     fn parse_tformula_application_bool_arg(
@@ -2834,7 +2901,20 @@ impl TermBank {
     ) -> Result<Term, Diagnostic> {
         if scanner.test_tok(TokenType::OPEN_BRACKET) {
             scanner.accept_tok(TokenType::OPEN_BRACKET)?;
-            let mut term = self.parse_tformula_tstp_subset(scanner)?;
+            let mut term = if scanner.test_tok(TokenType::FOF_BIN_OP)
+                && scanner.look_token(1).kind() == TokenType::CLOSE_BRACKET
+            {
+                let op = self.tptp_operator_parse(scanner)?;
+                self.make_logical_tformula_head(op)
+            } else if scanner.test_tok(TokenType::TILDE_SIGN)
+                && scanner.look_token(1).kind() == TokenType::CLOSE_BRACKET
+            {
+                scanner.accept_tok(TokenType::TILDE_SIGN)?;
+                let op = Self::require_formula_op_code(self.sig.not_code())?;
+                self.make_logical_tformula_head(op)
+            } else {
+                self.parse_tformula_tstp_subset(scanner)?
+            };
             scanner.accept_tok(TokenType::CLOSE_BRACKET)?;
             if scanner.test_tok(TokenType::APPLICATION) {
                 term = self.parse_applied_tformula_term_tstp_subset(scanner, &term)?;
@@ -2892,20 +2972,41 @@ impl TermBank {
         scanner: &mut Scanner,
         quantor: FunCode,
     ) -> Result<Term, Diagnostic> {
-        self.vars.push_env();
+        self.parse_quantified_tformula_tstp_variables(scanner, quantor, |bank, scanner| {
+            bank.parse_quantified_tformula_body(scanner, quantor)
+        })
+    }
+
+    fn parse_quantified_tformula_tstp_variables(
+        &mut self,
+        scanner: &mut Scanner,
+        quantor: FunCode,
+        parse_body: impl FnOnce(&mut Self, &mut Scanner) -> Result<Term, Diagnostic>,
+    ) -> Result<Term, Diagnostic> {
+        let mut variables = Vec::new();
+        let mut open_environments = 0_usize;
         let parsed = (|| {
-            let variable = self.parse_tstp_quantified_variable(scanner)?;
-            let rest = if scanner.test_tok(TokenType::COMMA) {
+            loop {
+                self.vars.push_env();
+                open_environments += 1;
+                variables.push(self.parse_tstp_quantified_variable(scanner)?);
+                if !scanner.test_tok(TokenType::COMMA) {
+                    break;
+                }
                 scanner.accept_tok(TokenType::COMMA)?;
-                self.parse_quantified_tformula_tstp_subset(scanner, quantor)?
-            } else {
-                scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
-                scanner.accept_tok(TokenType::COLON)?;
-                self.parse_quantified_tformula_body(scanner, quantor)?
-            };
-            self.tformula_fcode_alloc(quantor, variable, Some(rest))
+            }
+
+            scanner.accept_tok(TokenType::CLOSE_SQUARE)?;
+            scanner.accept_tok(TokenType::COLON)?;
+            let mut formula = parse_body(self, scanner)?;
+            for variable in variables.iter().rev() {
+                formula = self.tformula_fcode_alloc(quantor, variable.clone(), Some(formula))?;
+            }
+            Ok(formula)
         })();
-        self.vars.pop_env();
+        for _ in 0..open_environments {
+            self.vars.pop_env();
+        }
         parsed
     }
 
@@ -2933,16 +3034,7 @@ impl TermBank {
         &mut self,
         scanner: &mut Scanner,
     ) -> Result<Term, Diagnostic> {
-        let mut id = DynamicString::new();
-        let id_type = term_parse_operator(scanner, &mut id)?;
-        if id_type != FuncSymbType::IdentVar {
-            return Err(Diagnostic::new(
-                ErrorCode::SYNTAX_ERROR,
-                "Variable expected, non-variable term found",
-            ));
-        }
-
-        let name = id.view().into_owned();
+        let name = Self::parse_quantified_variable_name(scanner)?;
         if scanner.test_tok(TokenType::COLON) {
             scanner.accept_tok(TokenType::COLON)?;
             let type_ = self
@@ -2952,6 +3044,26 @@ impl TermBank {
             return Ok(self.vars.ext_name_assert_alloc_sort(&name, &type_));
         }
         Ok(self.vars.ext_name_assert_alloc(&name))
+    }
+
+    fn parse_tptp_quantified_variable(
+        &mut self,
+        scanner: &mut Scanner,
+    ) -> Result<Term, Diagnostic> {
+        let name = Self::parse_quantified_variable_name(scanner)?;
+        Ok(self.vars.ext_name_assert_alloc(&name))
+    }
+
+    fn parse_quantified_variable_name(scanner: &mut Scanner) -> Result<String, Diagnostic> {
+        let mut id = DynamicString::new();
+        let id_type = term_parse_operator(scanner, &mut id)?;
+        if id_type != FuncSymbType::IdentVar {
+            return Err(Diagnostic::new(
+                ErrorCode::SYNTAX_ERROR,
+                "Variable expected, non-variable term found",
+            ));
+        }
+        Ok(id.view().into_owned())
     }
 
     fn parse_ite_tformula_tstp_subset(
@@ -3227,8 +3339,21 @@ impl TermBank {
         let parsed = (|| {
             scanner.accept_tok(TokenType::COLON)?;
             scanner.accept_tok(TokenType::EQUAL_SIGN)?;
+            let pre_parse_f_count = self.sig.f_count();
             let rhs = self.parse_tformula_tstp_subset_with_plain_term_atoms(scanner, true)?;
             let lhs = self.let_definition_lhs(declaration.f_code, &variables)?;
+            let expected_type = lhs.type_().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorCode::TYPE_ERROR,
+                    "$let definition left side has no inferred type",
+                )
+            })?;
+            let mut rhs = ParsedIteBranch {
+                term: rhs,
+                pre_parse_f_count,
+            };
+            self.recover_untyped_ite_branch_to_expected_sort(&mut rhs, &expected_type)?;
+            let rhs = self.recover_untyped_equality_operand(rhs.term, &lhs)?;
             self.encode_equality_term(lhs, rhs, true)
         })();
         for _ in &variables {
@@ -3490,11 +3615,21 @@ impl TermBank {
                 let recovered_left = self.recover_tformula_arrow_equality_operand(left, &right)?;
                 let recovered_right =
                     self.recover_tformula_arrow_equality_operand(right, &recovered_left)?;
+                let recovered_left =
+                    self.recover_untyped_equality_operand(recovered_left, &recovered_right)?;
+                let recovered_right =
+                    self.recover_untyped_equality_operand(recovered_right, &recovered_left)?;
                 self.encode_equality_term(recovered_left, recovered_right, positive)
             }
         } else {
             if scanner.test_tok(TokenType::APPLICATION) {
                 return Ok(self.prepare_tformula_application_head(left));
+            }
+            if allow_plain_term_atoms {
+                let recovered = self.prepare_tformula_application_head(left.clone());
+                if recovered.type_().as_ref().is_some_and(Type::is_arrow) {
+                    return Ok(recovered);
+                }
             }
             if self.tformula_atom_can_stay_plain_term(&left) {
                 return Ok(left);
@@ -3562,6 +3697,74 @@ impl TermBank {
         let recovered = Term::const_cell_alloc(f_code);
         recovered.set_type(Some(recovered_type));
         self.term_top_insert(recovered)
+    }
+
+    fn recover_untyped_equality_operand(
+        &mut self,
+        term: Term,
+        other: &Term,
+    ) -> Result<Term, Diagnostic> {
+        let Some(other_type) = other.type_() else {
+            return Ok(term);
+        };
+        if other_type.is_arrow()
+            || other_type.is_bool()
+            || term.type_().as_ref() == Some(&other_type)
+        {
+            return Ok(term);
+        }
+
+        let candidate = if term.type_().as_ref() == Some(&self.sig.type_bank().default_type()) {
+            term.clone()
+        } else if term.f_code() == self.sig.eqn_code()
+            && term.arity() == 2
+            && term.argument(1) == Some(self.true_term.clone())
+        {
+            let Some(candidate) = term.argument(0).filter(|candidate| !candidate.is_any_var())
+            else {
+                return Ok(term);
+            };
+            candidate
+        } else {
+            return Ok(term);
+        };
+        if candidate.type_().as_ref() == Some(&other_type) {
+            return Ok(candidate);
+        }
+        if candidate.type_().as_ref() != Some(&self.sig.type_bank().default_type())
+            || candidate.f_code() <= self.sig.internal_symbols()
+            || self.sig.is_fixed_type(candidate.f_code())
+        {
+            return Ok(term);
+        }
+
+        let symbol_type = if candidate.arity() == 0 {
+            other_type.clone()
+        } else {
+            let mut args = Vec::with_capacity(candidate.arity() + 1);
+            for index in 0..candidate.arity() {
+                args.push(
+                    candidate
+                        .argument(index)
+                        .and_then(|arg| arg.type_())
+                        .ok_or_else(|| {
+                            Diagnostic::new(
+                                ErrorCode::TYPE_ERROR,
+                                "untyped equality operand argument has no inferred type",
+                            )
+                        })?,
+                );
+            }
+            args.push(other_type.clone());
+            self.sig
+                .type_bank_mut()
+                .insert_type_shared(alloc_arrow_type(args))
+        };
+
+        self.sig.declare_type(candidate.f_code(), symbol_type)?;
+        self.sig.fix_type(candidate.f_code());
+        candidate.set_type(Some(other_type));
+        Ok(candidate)
     }
 
     fn prepare_tformula_application_head(&mut self, head: Term) -> Term {
@@ -3695,6 +3898,23 @@ impl TermBank {
         right: Term,
         positive: bool,
     ) -> Result<Term, Diagnostic> {
+        let left_type = left.type_().ok_or_else(|| {
+            Diagnostic::new(
+                ErrorCode::TYPE_ERROR,
+                "left equality operand has no inferred type",
+            )
+        })?;
+        Self::require_term_sort(&right, &left_type, "right equality operand")?;
+        let left = if left.is_shared() || left.is_free_var() {
+            left
+        } else {
+            self.insert_ignore_var(&left, DerefType::Never)?
+        };
+        let right = if right.is_shared() || right.is_free_var() {
+            right
+        } else {
+            self.insert_ignore_var(&right, DerefType::Never)?
+        };
         let f_code = self.sig.get_eqn_code(positive);
         assert_ne!(f_code, 0, "equality code allocation must succeed");
         let term = Term::top_alloc(f_code, 2);
@@ -4595,7 +4815,7 @@ mod tests {
         tb_term_set_prop_count, term_is_false_term, term_is_true_term, TermBank,
         INSERT_NO_PROPS_CACHE_THRESHOLD, TERMCELL_DYN_MEM, TERMP_MEM,
     };
-    use crate::basics::error::ErrorCode;
+    use crate::basics::error::{Diagnostic, ErrorCode};
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
     use crate::inout::scanner::{Scanner, TokenType};
@@ -6178,6 +6398,30 @@ mod tests {
     }
 
     #[test]
+    fn checked_parser_recovers_untyped_non_boolean_let_value() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = unary_i_arg_bank("takes_i_arg");
+        let mut scanner =
+            Scanner::from_user_string("$let(f:$i, f := let_untyped_value, f)", false).unwrap();
+
+        let let_term = bank.parse_term_with_distinct_checks(&mut scanner).unwrap();
+
+        let i_type = bank.signature().type_bank().i_type();
+        assert_eq!(let_term.type_(), Some(i_type.clone()));
+        let definition = let_term.argument(0).expect("let definition");
+        let value = definition.argument(1).expect("let definition value");
+        assert_eq!(
+            bank.signature().find_name(value.f_code()),
+            Some("let_untyped_value")
+        );
+        assert_eq!(value.type_(), Some(i_type));
+        assert!(bank.signature().is_function(value.f_code()));
+        assert!(!bank.signature().is_predicate(value.f_code()));
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
     fn checked_parser_reads_non_boolean_let_variable_rhs_and_body() {
         let _guard = global_state_lock();
         let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
@@ -6799,6 +7043,127 @@ mod tests {
     }
 
     #[test]
+    fn tstp_formula_equality_recovers_bare_arrow_symbol_in_lambda_body() {
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+        let mut declarations =
+            Scanner::from_user_string("in: $i > $i > $o. esti: $i > $i > $i > $o.", false).unwrap();
+        for _ in 0..2 {
+            bank.signature_mut()
+                .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+                .unwrap();
+            declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        }
+        let mut scanner = Scanner::from_user_string("esti = (^[X: $i]: in)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        assert_eq!(formula.f_code(), bank.signature().eqn_code());
+        let left = formula.argument(0).unwrap();
+        let right = formula.argument(1).unwrap();
+        assert_eq!(right.f_code(), SIG_NAMED_LAMBDA_CODE);
+        assert_eq!(right.type_(), left.type_());
+        assert!(right
+            .argument(1)
+            .and_then(|body| body.type_())
+            .is_some_and(|type_| type_.is_arrow()));
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_formula_equality_refines_untyped_function_return_sort() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string("![R: $real]: (f(R) = R)", false).unwrap();
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let equality = formula.argument(1).expect("quantified equality");
+        let left = equality.argument(0).expect("left equality operand");
+        let real_type = bank.signature().type_bank().real_type();
+        assert_eq!(left.type_(), Some(real_type.clone()));
+        let symbol_type = bank
+            .signature()
+            .get_type(left.f_code())
+            .expect("refined function type");
+        assert_eq!(symbol_type.args(), &[real_type.clone(), real_type]);
+        assert!(bank.signature().is_fixed_type(left.f_code()));
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
+    }
+
+    #[test]
+    fn tstp_formula_equality_rejects_declared_scalar_sort_mismatch() {
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut bank = formula_bank();
+        let mut declarations = Scanner::from_user_string("a: $i. r: $real.", false).unwrap();
+        for _ in 0..2 {
+            bank.signature_mut()
+                .parse_tff_type_declaration(&mut declarations, ProblemType::HigherOrder)
+                .unwrap();
+            declarations.accept_tok(TokenType::FULLSTOP).unwrap();
+        }
+        let mut scanner = Scanner::from_user_string("a = r", false).unwrap();
+
+        let error = bank.parse_tformula_tstp(&mut scanner).unwrap_err();
+
+        assert_eq!(error.code(), ErrorCode::TYPE_ERROR);
+        assert_eq!(error.message(), "right equality operand has the wrong sort");
+    }
+
+    #[test]
+    fn tstp_formula_equality_keeps_boolean_arrow_variable_as_term_operand() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+        let mut bank = formula_bank();
+
+        for right_source in [
+            "(^[A: $o]: $false)",
+            "(~)",
+            "(^[A: $o]: A)",
+            "(^[A: $o]: $true)",
+        ] {
+            let source = format!("![B: $o > $o]: (B = {right_source})");
+            let mut scanner = Scanner::from_user_string(&source, false).unwrap();
+
+            let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+            assert_eq!(formula.f_code(), bank.signature().qall_code());
+            let equality = formula.argument(1).unwrap();
+            assert_eq!(equality.f_code(), bank.signature().eqn_code());
+            let left = equality.argument(0).unwrap();
+            let right = equality.argument(1).unwrap();
+            assert!(left.type_().is_some_and(|type_| type_.is_arrow()));
+            assert_eq!(right.type_(), left.type_());
+            if right_source == "(~)" {
+                assert_eq!(right.arity(), 0);
+                assert_eq!(right.f_code(), bank.signature().not_code());
+            } else {
+                assert_eq!(right.f_code(), SIG_NAMED_LAMBDA_CODE);
+            }
+            assert!(scanner.test_tok(TokenType::NO_TOKEN));
+        }
+    }
+
+    #[test]
+    fn tstp_formula_equality_rejects_mixed_boolean_function_sorts() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::HigherOrder);
+
+        for source in [
+            "![B: $o > $o]: (B = (^[A: $i]: $false))",
+            "![B: $o > $o]: (B = $true)",
+        ] {
+            let mut bank = formula_bank();
+            let mut scanner = Scanner::from_user_string(source, false).unwrap();
+
+            let error = bank.parse_tformula_tstp(&mut scanner).unwrap_err();
+
+            assert_eq!(error.code(), ErrorCode::TYPE_ERROR);
+            assert_eq!(error.message(), "right equality operand has the wrong sort");
+        }
+    }
+
+    #[test]
     fn tstp_formula_equality_accepts_partial_application_with_user_bool_result_sort() {
         let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
         let mut bank = formula_bank();
@@ -6893,6 +7258,168 @@ mod tests {
         assert_eq!(nested.f_code(), bank.signature().qall_code());
         let body = nested.argument(1).unwrap();
         assert_eq!(body.f_code(), bank.signature().eqn_code());
+    }
+
+    #[test]
+    fn quantified_variable_list_exceeds_former_call_stack_depth() {
+        const VARIABLE_COUNT: usize = 16_384;
+
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        let mut source = String::from("![");
+        for index in 0..VARIABLE_COUNT {
+            if index != 0 {
+                source.push(',');
+            }
+            source.push('V');
+            source.push_str(&index.to_string());
+        }
+        source.push_str("]: p(V0)");
+
+        for parse in [
+            TermBank::parse_tformula_tstp
+                as fn(&mut TermBank, &mut Scanner) -> Result<Term, Diagnostic>,
+            TermBank::parse_tformula_tptp,
+        ] {
+            let mut bank = formula_bank();
+            let mut scanner = Scanner::from_user_string(&source, false).unwrap();
+            let mut formula = parse(&mut bank, &mut scanner).unwrap();
+
+            for _ in 0..VARIABLE_COUNT {
+                assert_eq!(formula.f_code(), bank.signature().qall_code());
+                formula = formula.argument(1).expect("quantifier body");
+            }
+            assert_eq!(formula.f_code(), bank.signature().eqn_code());
+            assert!(scanner.test_tok(TokenType::NO_TOKEN));
+        }
+    }
+
+    #[test]
+    fn tstp_large_associative_chains_have_logarithmic_depth() {
+        const OPERAND_COUNT: usize = 16_384;
+
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+        for operator in ['&', '|'] {
+            let mut bank = formula_bank();
+            let mut source = String::new();
+            for index in 0..OPERAND_COUNT {
+                if index != 0 {
+                    source.push(operator);
+                }
+                source.push('p');
+                source.push_str(&index.to_string());
+            }
+            let mut scanner = Scanner::from_user_string(&source, false)
+                .expect("large associative formula scanner");
+
+            let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+            let connective_code = if operator == '&' {
+                bank.signature().and_code()
+            } else {
+                bank.signature().or_code()
+            };
+            let mut traversal = vec![(formula, 0_usize)];
+            let mut max_connective_depth = 0_usize;
+            let mut leaves = 0_usize;
+            while let Some((current, depth)) = traversal.pop() {
+                if current.f_code() == connective_code {
+                    max_connective_depth = max_connective_depth.max(depth);
+                    traversal.push((
+                        current.argument(1).expect("associative right operand"),
+                        depth + 1,
+                    ));
+                    traversal.push((
+                        current.argument(0).expect("associative left operand"),
+                        depth + 1,
+                    ));
+                } else {
+                    assert_eq!(current.f_code(), bank.signature().eqn_code());
+                    let predicate = current.argument(0).expect("encoded predicate term");
+                    let expected_name = format!("p{leaves}");
+                    assert_eq!(
+                        bank.signature().find_name(predicate.f_code()),
+                        Some(expected_name.as_str())
+                    );
+                    leaves += 1;
+                }
+            }
+            assert_eq!(leaves, OPERAND_COUNT);
+            assert!(max_connective_depth <= 14);
+            assert!(scanner.test_tok(TokenType::NO_TOKEN));
+        }
+    }
+
+    #[test]
+    fn quantified_variable_parse_errors_restore_environment_depth() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+
+        for parse in [
+            TermBank::parse_tformula_tstp
+                as fn(&mut TermBank, &mut Scanner) -> Result<Term, Diagnostic>,
+            TermBank::parse_tformula_tptp,
+        ] {
+            let mut bank = formula_bank();
+            let mut scanner = Scanner::from_user_string("![X,not_a_variable]:p(X)", false)
+                .expect("malformed quantified formula scanner");
+
+            let error = parse(&mut bank, &mut scanner)
+                .expect_err("non-variable quantifier entry must be rejected");
+
+            assert_eq!(error.code(), ErrorCode::SYNTAX_ERROR);
+            assert_eq!(
+                error.message(),
+                "Variable expected, non-variable term found"
+            );
+            assert!(bank.vars.ext_name_find("X").is_some());
+            assert_eq!(bank.vars.env_depth(), 0);
+        }
+    }
+
+    #[test]
+    fn quantified_variable_lists_preserve_c_same_name_reuse() {
+        let _guard = global_state_lock();
+        let _problem_type = set_problem_type_for_test(ProblemType::FirstOrder);
+
+        for parse in [
+            TermBank::parse_tformula_tstp
+                as fn(&mut TermBank, &mut Scanner) -> Result<Term, Diagnostic>,
+            TermBank::parse_tformula_tptp,
+        ] {
+            let mut bank = formula_bank();
+            let mut scanner = Scanner::from_user_string("![X,X]:p(X)", false)
+                .expect("shadowed quantifier scanner");
+
+            let formula = parse(&mut bank, &mut scanner).unwrap();
+
+            let outer = formula.argument(0).expect("outer binder");
+            let inner_formula = formula.argument(1).expect("outer body");
+            let inner = inner_formula.argument(0).expect("inner binder");
+            let body = inner_formula.argument(1).expect("inner body");
+            let predicate = body.argument(0).expect("encoded predicate");
+            assert_eq!(outer, inner);
+            assert_eq!(predicate.argument(0), Some(inner));
+            assert_eq!(bank.vars.ext_name_find("X"), Some(outer));
+            assert!(scanner.test_tok(TokenType::NO_TOKEN));
+        }
+
+        let mut bank = formula_bank();
+        let mut scanner = Scanner::from_user_string("![X: $i,X: $i]:(X = X)", false)
+            .expect("typed shadowed quantifier scanner");
+
+        let formula = bank.parse_tformula_tstp(&mut scanner).unwrap();
+
+        let outer = formula.argument(0).expect("typed outer binder");
+        let inner_formula = formula.argument(1).expect("typed outer body");
+        let inner = inner_formula.argument(0).expect("typed inner binder");
+        let equality = inner_formula.argument(1).expect("typed inner body");
+        assert_eq!(outer, inner);
+        assert_eq!(equality.argument(0), Some(inner.clone()));
+        assert_eq!(equality.argument(1), Some(inner));
+        assert_eq!(bank.vars.ext_name_find("X"), Some(outer));
+        assert!(scanner.test_tok(TokenType::NO_TOKEN));
     }
 
     #[test]

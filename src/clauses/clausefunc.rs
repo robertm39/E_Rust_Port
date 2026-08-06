@@ -1446,15 +1446,40 @@ pub fn tformula_expand_literals(bank: &mut TermBank, form: &Term) -> Result<Term
         return Ok(form.clone());
     }
 
-    let (eqn_code, neqn_code, not_code, equiv_code) = {
+    let (eqn_code, neqn_code, not_code, equiv_code, qex_code, qall_code) = {
         let sig = bank.signature();
         (
             sig.eqn_code(),
             sig.neqn_code(),
             sig.not_code(),
             sig.equiv_code(),
+            sig.qex_code(),
+            sig.qall_code(),
         )
     };
+
+    if form.f_code() == qex_code || form.f_code() == qall_code {
+        let mut prefix = Vec::new();
+        let mut matrix = form.clone();
+        while matrix.f_code() == qex_code || matrix.f_code() == qall_code {
+            prefix.push(matrix.clone());
+            matrix = formula_argument(&matrix, 1);
+        }
+
+        let mut current = tformula_expand_literals(bank, &matrix)?;
+        for original in prefix.iter().rev() {
+            let original_body = formula_argument(original, 1);
+            if current == original_body {
+                current = original.clone();
+            } else {
+                let copy = Term::top_copy_without_args(original);
+                copy.set_argument(0, formula_argument(original, 0));
+                copy.set_argument(1, current);
+                current = bank.term_top_insert(copy)?;
+            }
+        }
+        return Ok(current);
+    }
 
     let mut current = if form.f_code() == neqn_code {
         let equality = tformula_fcode_alloc(
@@ -2054,17 +2079,28 @@ fn do_fool_unroll(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> 
     }
 
     if tformula_is_quantified(bank, form) && !form.is_lambda() {
-        let original_body = formula_argument(form, 1);
-        let unrolled_body = do_fool_unroll(bank, &original_body)?;
-        if unrolled_body != original_body {
-            return tformula_fcode_alloc(
-                bank,
-                form.f_code(),
-                formula_argument(form, 0),
-                Some(unrolled_body),
-            );
+        let mut prefix = Vec::new();
+        let mut matrix = form.clone();
+        while tformula_is_quantified(bank, &matrix) && !matrix.is_lambda() {
+            prefix.push(matrix.clone());
+            matrix = formula_argument(&matrix, 1);
         }
-        return Ok(form.clone());
+
+        let mut current = do_fool_unroll(bank, &matrix)?;
+        for original in prefix.iter().rev() {
+            let original_body = formula_argument(original, 1);
+            if current == original_body {
+                current = original.clone();
+            } else {
+                current = tformula_fcode_alloc(
+                    bank,
+                    original.f_code(),
+                    formula_argument(original, 0),
+                    Some(current),
+                )?;
+            }
+        }
+        return Ok(current);
     }
 
     if form.is_lambda() {
@@ -2212,6 +2248,32 @@ pub fn tformula_simplify(
         return Ok(form.clone());
     }
 
+    if tformula_is_quantified_nl(bank, form) {
+        let mut prefix = Vec::new();
+        let mut matrix = form.clone();
+        while tformula_is_quantified_nl(bank, &matrix) {
+            prefix.push(matrix.clone());
+            matrix = formula_argument(&matrix, 1);
+        }
+
+        let mut current = tformula_simplify(bank, &matrix, quopt_limit)?;
+        for original in prefix.iter().rev() {
+            let original_body = formula_argument(original, 1);
+            let rebuilt = if current == original_body {
+                original.clone()
+            } else {
+                tformula_fcode_alloc(
+                    bank,
+                    original.f_code(),
+                    formula_argument(original, 0),
+                    Some(current),
+                )?
+            };
+            current = tformula_simplify_root_fixpoint(bank, rebuilt, quopt_limit)?;
+        }
+        return Ok(current);
+    }
+
     let mut arg1 = None;
     let mut arg2 = None;
     let mut modified = false;
@@ -2220,18 +2282,16 @@ pub fn tformula_simplify(
         let simplified = tformula_simplify(bank, &original, quopt_limit)?;
         modified = simplified != original;
         arg1 = Some(simplified);
-    } else if tformula_is_quantified(bank, form) {
-        arg1 = Some(formula_argument(form, 0));
     }
 
-    if tformula_has_subform2(bank, form) || tformula_is_quantified(bank, form) {
+    if tformula_has_subform2(bank, form) {
         let original = formula_argument(form, 1);
         let simplified = tformula_simplify(bank, &original, quopt_limit)?;
         modified |= simplified != original;
         arg2 = Some(simplified);
     }
 
-    let mut current = if modified {
+    let current = if modified {
         tformula_fcode_alloc(
             bank,
             form.f_code(),
@@ -2242,6 +2302,14 @@ pub fn tformula_simplify(
         form.clone()
     };
 
+    tformula_simplify_root_fixpoint(bank, current, quopt_limit)
+}
+
+fn tformula_simplify_root_fixpoint(
+    bank: &mut TermBank,
+    mut current: Term,
+    quopt_limit: i64,
+) -> Result<Term, Diagnostic> {
     loop {
         let simplified = tformula_simplify_root_once(bank, &current, quopt_limit)?;
         if simplified == current {
@@ -3979,6 +4047,17 @@ pub fn tformula_find_defs(
         return Ok(());
     }
 
+    if tformula_is_quantified_nl(bank, form) {
+        let mut current = form.clone();
+        while tformula_is_quantified_nl(bank, &current) {
+            if current.query_prop(TP_CHECK_FLAG) {
+                tformula_def_rename(bank, &current, polarity, defs, renamed_forms)?;
+            }
+            current = formula_argument(&current, 1);
+        }
+        return tformula_find_defs(bank, &current, polarity, def_limit, defs, renamed_forms);
+    }
+
     if form.query_prop(TP_CHECK_FLAG) {
         tformula_def_rename(bank, form, polarity, defs, renamed_forms)?;
     }
@@ -4057,6 +4136,7 @@ pub fn tformula_find_defs(
 /// Panics if a marked formula has no definition entry, or if a used definition
 /// entry has not yet been populated with the metadata produced by definition
 /// introduction.
+#[allow(clippy::too_many_lines)]
 pub fn tformula_copy_def(
     bank: &mut TermBank,
     form: &Term,
@@ -4074,6 +4154,26 @@ pub fn tformula_copy_def(
         || !bank.signature().is_logical_symbol(form.f_code())
     {
         return Ok(form.clone());
+    }
+
+    if tformula_is_quantified_nl(bank, form) && !form.query_prop(TP_CHECK_FLAG) {
+        let mut prefix = Vec::new();
+        let mut matrix = form.clone();
+        while tformula_is_quantified_nl(bank, &matrix) && !matrix.query_prop(TP_CHECK_FLAG) {
+            prefix.push(matrix.clone());
+            matrix = formula_argument(&matrix, 1);
+        }
+
+        let mut current = tformula_copy_def(bank, &matrix, blocked, defs, defs_used)?;
+        for original in prefix.iter().rev() {
+            current = tformula_fcode_alloc(
+                bank,
+                original.f_code(),
+                formula_argument(original, 0),
+                Some(current),
+            )?;
+        }
+        return Ok(current);
     }
 
     if form.query_prop(TP_CHECK_FLAG) {
@@ -4293,17 +4393,6 @@ pub fn tformula_mark_polarity(bank: &TermBank, form: &Term, polarity: i32) {
         "TFormulaMarkPolarity polarity must be -1, 0, or 1"
     );
 
-    if tformula_is_literal(bank, form) {
-        return;
-    }
-
-    match polarity {
-        -1 => form.set_prop(TP_NEG_POLARITY),
-        0 => form.set_prop(TP_POS_POLARITY | TP_NEG_POLARITY),
-        1 => form.set_prop(TP_POS_POLARITY),
-        _ => unreachable!("polarity assertion above covers all cases"),
-    }
-
     let (and_code, or_code, not_code, implication_code, equivalence_code, qex_code, qall_code) = {
         let sig = bank.signature();
         (
@@ -4317,24 +4406,38 @@ pub fn tformula_mark_polarity(bank: &TermBank, form: &Term, polarity: i32) {
         )
     };
 
-    let f_code = form.f_code();
-    if f_code == and_code || f_code == or_code {
-        tformula_mark_polarity(bank, &formula_argument(form, 0), polarity);
-    } else if f_code == not_code || f_code == implication_code {
-        tformula_mark_polarity(bank, &formula_argument(form, 0), -polarity);
-    } else if f_code == equivalence_code {
-        tformula_mark_polarity(bank, &formula_argument(form, 0), 0);
-    }
+    let mut traversal = vec![(form.clone(), polarity)];
+    while let Some((current, current_polarity)) = traversal.pop() {
+        if tformula_is_literal(bank, &current) {
+            continue;
+        }
 
-    if f_code == and_code
-        || f_code == or_code
-        || f_code == implication_code
-        || f_code == qex_code
-        || f_code == qall_code
-    {
-        tformula_mark_polarity(bank, &formula_argument(form, 1), polarity);
-    } else if f_code == equivalence_code {
-        tformula_mark_polarity(bank, &formula_argument(form, 1), 0);
+        match current_polarity {
+            -1 => current.set_prop(TP_NEG_POLARITY),
+            0 => current.set_prop(TP_POS_POLARITY | TP_NEG_POLARITY),
+            1 => current.set_prop(TP_POS_POLARITY),
+            _ => unreachable!("polarity assertion above covers all cases"),
+        }
+
+        let f_code = current.f_code();
+        if f_code == and_code
+            || f_code == or_code
+            || f_code == implication_code
+            || f_code == qex_code
+            || f_code == qall_code
+        {
+            traversal.push((formula_argument(&current, 1), current_polarity));
+        } else if f_code == equivalence_code {
+            traversal.push((formula_argument(&current, 1), 0));
+        }
+
+        if f_code == and_code || f_code == or_code {
+            traversal.push((formula_argument(&current, 0), current_polarity));
+        } else if f_code == not_code || f_code == implication_code {
+            traversal.push((formula_argument(&current, 0), -current_polarity));
+        } else if f_code == equivalence_code {
+            traversal.push((formula_argument(&current, 0), 0));
+        }
     }
 }
 
@@ -4498,16 +4601,24 @@ pub fn tformula_nnf(bank: &mut TermBank, form: &Term, polarity: i32) -> Result<T
                 current = tformula_fcode_alloc(bank, not_code, rewritten, None)?;
             }
         } else if current.f_code() == qex_code || current.f_code() == qall_code {
-            let body = formula_argument(&current, 1);
-            let rewritten = tformula_nnf(bank, &body, polarity)?;
-            if rewritten != body {
+            let mut prefix = Vec::new();
+            let mut matrix = current.clone();
+            while matrix.f_code() == qex_code || matrix.f_code() == qall_code {
+                prefix.push(matrix.clone());
+                matrix = formula_argument(&matrix, 1);
+            }
+            let rewritten = tformula_nnf(bank, &matrix, polarity)?;
+            if rewritten != matrix {
                 normal_form = false;
-                current = tformula_fcode_alloc(
-                    bank,
-                    current.f_code(),
-                    formula_argument(&current, 0),
-                    Some(rewritten),
-                )?;
+                current = rewritten;
+                for original in prefix.iter().rev() {
+                    current = tformula_fcode_alloc(
+                        bank,
+                        original.f_code(),
+                        formula_argument(original, 0),
+                        Some(current),
+                    )?;
+                }
             }
         } else if current.f_code() == and_code || current.f_code() == or_code {
             let left = formula_argument(&current, 0);
@@ -4859,33 +4970,36 @@ fn tform_find_miniscopeable(
     }
 
     let qex_code = bank.signature().qex_code();
-    if tformula_is_quantified(bank, form) {
+    if tformula_is_quantified_nl(bank, form) {
+        let mut prefix = Vec::new();
+        let mut matrix = form.clone();
+        while tformula_is_quantified_nl(bank, &matrix) {
+            prefix.push(matrix.clone());
+            matrix = formula_argument(&matrix, 1);
+        }
+
         let mut nested_candidates = BTreeMap::new();
-        let body_scan = tform_find_miniscopeable(
-            bank,
-            &formula_argument(form, 1),
-            limit,
-            &mut nested_candidates,
-        );
-        let size = tform_size_add(1, body_scan.size);
-
-        if form.f_code() == qex_code {
-            candidates.extend(nested_candidates);
-            return MiniscopeScan {
-                size,
-                has_existential: true,
-            };
+        let mut scan = tform_find_miniscopeable(bank, &matrix, limit, &mut nested_candidates);
+        for quantified in prefix.iter().rev() {
+            let size = tform_size_add(1, scan.size);
+            if quantified.f_code() == qex_code {
+                scan = MiniscopeScan {
+                    size,
+                    has_existential: true,
+                };
+            } else {
+                if size <= limit && scan.has_existential {
+                    nested_candidates.clear();
+                    nested_candidates.insert(term_identity_id(quantified), quantified.clone());
+                }
+                scan = MiniscopeScan {
+                    size,
+                    has_existential: scan.has_existential,
+                };
+            }
         }
-
-        if size <= limit && body_scan.has_existential {
-            candidates.insert(term_identity_id(form), form.clone());
-        } else {
-            candidates.extend(nested_candidates);
-        }
-        return MiniscopeScan {
-            size,
-            has_existential: body_scan.has_existential,
-        };
+        candidates.extend(nested_candidates);
+        return scan;
     }
 
     let mut size = 1;
@@ -4923,17 +5037,36 @@ fn tform_copy_mod(bank: &mut TermBank, form: &Term) -> Result<Term, Diagnostic> 
         return Ok(binding);
     }
 
+    if tformula_is_quantified_nl(bank, form) {
+        let mut prefix = Vec::new();
+        let mut matrix = form.clone();
+        while tformula_is_quantified_nl(bank, &matrix) && matrix.binding().is_none() {
+            prefix.push(matrix.clone());
+            matrix = formula_argument(&matrix, 1);
+        }
+
+        let mut current = tform_copy_mod(bank, &matrix)?;
+        for original in prefix.iter().rev() {
+            let original_body = formula_argument(original, 1);
+            if current == original_body {
+                current = original.clone();
+            } else {
+                current = tformula_fcode_alloc(
+                    bank,
+                    original.f_code(),
+                    formula_argument(original, 0),
+                    Some(current),
+                )?;
+            }
+        }
+        return Ok(current);
+    }
+
     let mut left = None;
     let mut right = None;
     let mut changed = false;
 
-    if tformula_is_quantified(bank, form) {
-        left = Some(formula_argument(form, 0));
-        let original = formula_argument(form, 1);
-        let copied = tform_copy_mod(bank, &original)?;
-        changed = copied != original;
-        right = Some(copied);
-    } else if tformula_has_subform1(bank, form) {
+    if tformula_has_subform1(bank, form) {
         let original = formula_argument(form, 0);
         let copied = tform_copy_mod(bank, &original)?;
         changed = copied != original;
@@ -4993,6 +5126,7 @@ fn tformula_var_rename_with_bindings(
     Ok((formula, renamings))
 }
 
+#[allow(clippy::too_many_lines)]
 fn tformula_rek_var_rename(
     bank: &mut TermBank,
     form: &Term,
@@ -5003,6 +5137,45 @@ fn tformula_rek_var_rename(
         "TFormulaVarRename expects no applied free-variable root"
     );
 
+    let (qex_code, qall_code) = {
+        let signature = bank.signature();
+        (signature.qex_code(), signature.qall_code())
+    };
+    if form.f_code() == qex_code || form.f_code() == qall_code {
+        let mut prefix = Vec::new();
+        let mut binding_restores = Vec::new();
+        let mut matrix = form.clone();
+        while matrix.f_code() == qex_code || matrix.f_code() == qall_code {
+            let quantified_var = formula_argument(&matrix, 0);
+            let fresh_type = quantified_var
+                .type_()
+                .expect("quantified variable must have a type");
+            let fresh_var = bank.vars().get_fresh_var(&fresh_type);
+            assert_ne!(
+                fresh_var, quantified_var,
+                "fresh quantified variable must differ from original"
+            );
+            renamings.push(TFormulaVariableRename {
+                original: quantified_var.clone(),
+                fresh: fresh_var.clone(),
+            });
+            binding_restores.push(BindingRestore::install(quantified_var, fresh_var.clone()));
+            prefix.push((matrix.clone(), fresh_var));
+            matrix = formula_argument(&matrix, 1);
+        }
+
+        let mut current = tformula_rek_var_rename(bank, &matrix, renamings)?;
+        for (original, fresh_var) in prefix.iter().rev() {
+            current =
+                tformula_fcode_alloc(bank, original.f_code(), fresh_var.clone(), Some(current))?;
+        }
+        drop(binding_restores);
+        return Ok(current);
+    }
+
+    // Named lambdas retain the original single-binder copy path. In
+    // particular, copying an arrow-typed lambda follows the installed binder
+    // through `DerefType::Always` without freshening nested lambda binders.
     let quantified = if tformula_is_quantified(bank, form) {
         let quantified_var = formula_argument(form, 0);
         let fresh_type = quantified_var
@@ -5150,60 +5323,63 @@ fn tformula_rek_skolemize(
         (sig.qall_code(), sig.qex_code())
     };
 
-    if form.f_code() == qex_code {
-        assert_eq!(
-            form.arity(),
-            2,
-            "existential formula must have variable and body arguments"
-        );
-        let variable = formula_argument(form, 0);
-        assert!(
-            variable.is_free_var(),
-            "existential quantifier must bind a free variable"
-        );
-        assert!(
-            variable.binding().is_none(),
-            "existential variable must not already be bound"
-        );
-        let variable_type = variable
-            .type_()
-            .expect("existential variable must have a type");
-        let skolem = bank.alloc_new_skolem(free_vars.as_slice(), Some(&variable_type))?;
-        bindings.push(TFormulaSkolemBinding {
-            variable: variable.clone(),
-            skolem_term: skolem.clone(),
-            phase_variable: variable.clone(),
-            phase_skolem_term: skolem.clone(),
-        });
-        let _binding = BindingRestore::install(variable, skolem);
-        return tformula_rek_skolemize(bank, &formula_argument(form, 1), free_vars, bindings);
-    }
+    if form.f_code() == qex_code || form.f_code() == qall_code {
+        let mut current = form.clone();
+        let mut universal_variables = Vec::new();
+        let mut binding_restores = Vec::new();
+        let matrix_result = (|| {
+            while current.f_code() == qex_code || current.f_code() == qall_code {
+                assert_eq!(
+                    current.arity(),
+                    2,
+                    "quantified formula must have variable and body arguments"
+                );
+                let variable = formula_argument(&current, 0);
+                assert!(
+                    variable.is_free_var(),
+                    "quantifier must bind a free variable"
+                );
+                assert!(
+                    variable.binding().is_none(),
+                    "quantified variable must not already be bound"
+                );
 
-    if form.f_code() == qall_code {
-        assert_eq!(
-            form.arity(),
-            2,
-            "universal formula must have variable and body arguments"
-        );
-        let variable = formula_argument(form, 0);
-        assert!(
-            variable.is_free_var(),
-            "universal quantifier must bind a free variable"
-        );
-        assert!(
-            variable.binding().is_none(),
-            "universal variable must not already be bound"
-        );
-        free_vars.push(variable.clone());
-        let body_result =
-            tformula_rek_skolemize(bank, &formula_argument(form, 1), free_vars, bindings);
-        let popped = free_vars.pop().expect("universal variable stack underflow");
-        assert_eq!(
-            popped, variable,
-            "universal variable stack must unwind in LIFO order"
-        );
-        let body = body_result?;
-        return tformula_fcode_alloc(bank, qall_code, variable, Some(body));
+                if current.f_code() == qex_code {
+                    let variable_type = variable
+                        .type_()
+                        .expect("existential variable must have a type");
+                    let skolem =
+                        bank.alloc_new_skolem(free_vars.as_slice(), Some(&variable_type))?;
+                    bindings.push(TFormulaSkolemBinding {
+                        variable: variable.clone(),
+                        skolem_term: skolem.clone(),
+                        phase_variable: variable.clone(),
+                        phase_skolem_term: skolem.clone(),
+                    });
+                    binding_restores.push(BindingRestore::install(variable, skolem));
+                } else {
+                    free_vars.push(variable.clone());
+                    universal_variables.push(variable);
+                }
+                current = formula_argument(&current, 1);
+            }
+
+            tformula_rek_skolemize(bank, &current, free_vars, bindings)
+        })();
+        for variable in universal_variables.iter().rev() {
+            let popped = free_vars.pop().expect("universal variable stack underflow");
+            assert_eq!(
+                &popped, variable,
+                "universal variable stack must unwind in LIFO order"
+            );
+        }
+
+        let mut result = matrix_result?;
+        for variable in universal_variables.iter().rev() {
+            result = tformula_fcode_alloc(bank, qall_code, variable.clone(), Some(result))?;
+        }
+        drop(binding_restores);
+        return Ok(result);
     }
 
     assert!(
@@ -5236,12 +5412,67 @@ fn tformula_rek_skolemize(
 /// Unlike C, this staged Rust helper does not mutate `TPIsFreeVar`. It preserves
 /// the pointer-identity splay and root-right-left `PTreeToPStack` order through
 /// safe term identities.
+///
+/// # Panics
+///
+/// Panics if the iterative traversal's quantifier-entry and quantifier-exit
+/// events become unbalanced.
 #[must_use]
 pub fn tformula_collect_free_vars(bank: &TermBank, form: &Term) -> Vec<Term> {
     let mut vars = TFormulaVariableCollector::new();
-    let mut bound = Vec::new();
-    tformula_collect_free_vars_rek(bank, form, &mut bound, &mut vars);
+    let mut bound = BTreeMap::<usize, usize>::new();
+    let mut traversal = vec![TFormulaFreeVarTraversal::Visit(form.clone())];
+    while let Some(step) = traversal.pop() {
+        let form = match step {
+            TFormulaFreeVarTraversal::Visit(form) => form,
+            TFormulaFreeVarTraversal::LeaveBound(variable_id) => {
+                let count = bound
+                    .get_mut(&variable_id)
+                    .expect("bound variable stack underflow");
+                *count -= 1;
+                if *count == 0 {
+                    bound.remove(&variable_id);
+                }
+                continue;
+            }
+        };
+
+        if form.f_code() == SIG_LET_CODE {
+            if form.arity() > 0 {
+                traversal.push(TFormulaFreeVarTraversal::Visit(formula_argument(
+                    &form,
+                    form.arity() - 1,
+                )));
+            }
+            continue;
+        }
+        if form.is_db_var() {
+            continue;
+        }
+        if tformula_is_quantified(bank, &form) && form.arity() == 2 {
+            let variable_id = term_identity_id(&formula_argument(&form, 0));
+            *bound.entry(variable_id).or_insert(0) += 1;
+            traversal.push(TFormulaFreeVarTraversal::LeaveBound(variable_id));
+            traversal.push(TFormulaFreeVarTraversal::Visit(formula_argument(&form, 1)));
+            continue;
+        }
+        if form.is_free_var() {
+            if !bound.contains_key(&term_identity_id(&form)) {
+                vars.store(form);
+            }
+            continue;
+        }
+
+        for arg in form.argument_clones().into_iter().flatten().rev() {
+            traversal.push(TFormulaFreeVarTraversal::Visit(arg));
+        }
+    }
     vars.into_c_stack_order()
+}
+
+enum TFormulaFreeVarTraversal {
+    Visit(Term),
+    LeaveBound(usize),
 }
 
 struct TFormulaVariableCollector {
@@ -5294,61 +5525,6 @@ fn term_collect_variables_in_c_stack_order(term: &Term) -> Vec<Term> {
         }
     }
     vars.into_c_stack_order()
-}
-
-fn tformula_collect_free_vars_rek(
-    bank: &TermBank,
-    form: &Term,
-    bound: &mut Vec<usize>,
-    vars: &mut TFormulaVariableCollector,
-) {
-    if form.f_code() == SIG_LET_CODE {
-        if form.arity() > 0 {
-            tformula_collect_free_vars_rek(
-                bank,
-                &formula_argument(form, form.arity() - 1),
-                bound,
-                vars,
-            );
-        }
-        return;
-    }
-
-    if form.is_db_var() {
-        return;
-    }
-
-    if tformula_is_quantified(bank, form) && form.arity() == 2 {
-        let variable = formula_argument(form, 0);
-        let variable_id = term_identity_id(&variable);
-        bound.push(variable_id);
-        tformula_collect_free_vars_rek(bank, &formula_argument(form, 1), bound, vars);
-        let popped = bound.pop().expect("bound variable stack underflow");
-        assert_eq!(
-            popped, variable_id,
-            "bound variable stack must unwind in LIFO order"
-        );
-        return;
-    }
-
-    if form.is_free_var() {
-        let variable_id = term_identity_id(form);
-        if !bound.contains(&variable_id) {
-            vars.store(form.clone());
-        }
-        return;
-    }
-
-    for arg in form.argument_clones().into_iter().flatten() {
-        if arg.is_free_var() {
-            let variable_id = term_identity_id(&arg);
-            if !bound.contains(&variable_id) {
-                vars.store(arg);
-            }
-        } else {
-            tformula_collect_free_vars_rek(bank, &arg, bound, vars);
-        }
-    }
 }
 
 /// Shifts universal quantifiers in a term-encoded NNF formula outward.
@@ -7079,7 +7255,7 @@ mod tests {
         clause_set_canonize, clause_set_delete_orphans_with, clause_set_recognize_choice,
         clause_set_remove_superfluous_literals, clause_set_replace_injectivity_defs,
         clause_unit_simplify_test, close_with_db_var, pstack_clause_print_format_string,
-        pstack_clause_print_lop_string, tcf_tstp_parse, tformula_add_quantor,
+        pstack_clause_print_lop_string, tcf_tstp_parse, tform_copy_mod, tformula_add_quantor,
         tformula_app_encode_string, tformula_clause_closed_encode, tformula_clause_encode,
         tformula_closure, tformula_collect_clause, tformula_collect_free_vars,
         tformula_conjunctive_nf, tformula_conjunctive_nf3, tformula_copy, tformula_copy_def,
@@ -7098,8 +7274,9 @@ mod tests {
         tformula_simplify_decoded, tformula_skolemize_outermost,
         tformula_skolemize_outermost_with_bindings, tformula_stack_to_form, tformula_to_cnf,
         tformula_tptp_parse, tformula_tptp_string, tformula_tstp_parse, tformula_unroll_fool,
-        tformula_var_is_free, tformula_var_is_free_cached, tformula_var_rename,
-        TFormulaDefinitions, TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
+        tformula_unroll_fool_result, tformula_var_is_free, tformula_var_is_free_cached,
+        tformula_var_rename, tformula_var_rename_with_bindings, TFormulaDefinitions,
+        TFormulaTptpPrintOptions, TFORM_MANY_CLAUSES,
     };
     use crate::basics::pstacks::PStack;
     use crate::basics::simple_stuff::{reset_problem_type, set_problem_type, ProblemType};
@@ -9726,6 +9903,99 @@ mod tests {
         let free_vars = tformula_collect_free_vars(&bank, &formula);
 
         assert_eq!(free_vars, vec![y, x]);
+    }
+
+    #[test]
+    fn tformula_core_traversals_handle_deep_quantifier_chain_iteratively() {
+        const VARIABLE_COUNT: usize = 16_384;
+
+        let mut bank = test_bank();
+        let bound = (0..VARIABLE_COUNT)
+            .map(|index| {
+                let index = i64::try_from(index).expect("variable index fits i64");
+                typed_var(&bank, -400 - 2 * index)
+            })
+            .collect::<Vec<_>>();
+        let variable_count = i64::try_from(VARIABLE_COUNT).expect("variable count fits i64");
+        let free = typed_var(&bank, -400 - 2 * variable_count);
+        let eqn_code = bank.signature_mut().get_eqn_code(true);
+        let mut formula = bool_binary_with_code(&mut bank, eqn_code, &bound[0], &free);
+        let (qall_code, qex_code) = {
+            let signature = bank.signature();
+            (signature.qall_code(), signature.qex_code())
+        };
+        for (index, variable) in bound.iter().enumerate().rev() {
+            let quantifier = if index == 0 { qex_code } else { qall_code };
+            formula = tformula_quantor_alloc(&mut bank, quantifier, variable, &formula).unwrap();
+        }
+
+        let free_vars = tformula_collect_free_vars(&bank, &formula);
+        let expanded = tformula_expand_literals(&mut bank, &formula).unwrap();
+        let modified_copy = tform_copy_mod(&mut bank, &formula).unwrap();
+        let simplified = tformula_simplify(&mut bank, &formula, 0).unwrap();
+        let nnf = tformula_nnf(&mut bank, &formula, 1).unwrap();
+        let unrolled = tformula_unroll_fool_result(&mut bank, &formula).unwrap();
+        let miniscoped = tformula_mini_scope3(&mut bank, &formula, 1_000).unwrap();
+        prepare_formula_fresh_vars(&bank);
+        let (renamed, renamings) = tformula_var_rename_with_bindings(&mut bank, &formula).unwrap();
+        let (skolemized, skolem_bindings) =
+            tformula_skolemize_outermost_with_bindings(&mut bank, &formula).unwrap();
+        tformula_mark_polarity(&bank, &formula, 1);
+        let mut definitions = TFormulaDefinitions::new();
+        let mut renamed_forms = Vec::new();
+        tformula_find_defs(
+            &mut bank,
+            &formula,
+            1,
+            24,
+            &mut definitions,
+            &mut renamed_forms,
+        )
+        .unwrap();
+        let mut definitions_used = Vec::new();
+        let copied =
+            tformula_copy_def(&mut bank, &formula, -1, &definitions, &mut definitions_used)
+                .unwrap();
+
+        assert_eq!(free_vars, vec![free]);
+        assert_eq!(expanded, formula);
+        assert_eq!(modified_copy, formula);
+        assert_eq!(simplified, formula);
+        assert_eq!(nnf, formula);
+        assert_eq!(unrolled.formula(), &formula);
+        assert!(!unrolled.fool_unrolled());
+        assert_eq!(miniscoped, formula);
+        assert_eq!(renamings.len(), VARIABLE_COUNT);
+        let mut renamed_body = renamed;
+        for (index, original) in bound.iter().enumerate() {
+            let expected_quantifier = if index == 0 { qex_code } else { qall_code };
+            assert_eq!(renamed_body.f_code(), expected_quantifier);
+            assert_ne!(renamed_body.argument(0).as_ref(), Some(original));
+            renamed_body = renamed_body.argument(1).expect("renamed quantifier body");
+            assert!(original.binding().is_none());
+        }
+        assert_eq!(renamed_body.f_code(), eqn_code);
+        let mut skolemized_body = skolemized;
+        for original in &bound[1..] {
+            assert_eq!(skolemized_body.f_code(), qall_code);
+            assert_eq!(skolemized_body.argument(0).as_ref(), Some(original));
+            skolemized_body = skolemized_body
+                .argument(1)
+                .expect("skolemized universal body");
+        }
+        assert_eq!(skolemized_body.f_code(), eqn_code);
+        assert_eq!(skolem_bindings.len(), 1);
+        assert_eq!(skolem_bindings[0].variable(), &bound[0]);
+        assert_eq!(skolem_bindings[0].skolem_term().arity(), 1);
+        assert_eq!(
+            skolemized_body.argument(0).as_ref(),
+            Some(skolem_bindings[0].skolem_term())
+        );
+        assert_eq!(copied, formula);
+        assert!(formula.query_prop(TP_POS_POLARITY));
+        assert!(definitions.is_empty());
+        assert!(renamed_forms.is_empty());
+        assert!(definitions_used.is_empty());
     }
 
     #[test]
