@@ -1508,6 +1508,112 @@ zero-residue evidence, and provider teardown complete.  The first ordinary
 controller poll retained the exact service identity and advanced the inventory
 to 1,858, confirming useful work without a restart.
 
+## Verified successor J13 checkpoint at 2,352 results
+
+Question: did the guarded 1,855-result successor survive controller transport
+failures without restarting its solver service, produce a fully reproducible
+checkpoint, and delete only its exact managed provider resources after local
+verification?  The answer is yes.  Service
+`casc-j13-v2-resume-260806-073551-6bd0.service` retained MainPID `3991`,
+invocation `7fcddd3bf79048408785da9a713e2ba0`, and `NRestarts=0` throughout
+the slice.  Its terminal journal binds those identities plus boot
+`b18fe314fb03404593260e2c33cc4397` and success sequence `18680` to 1,855
+resumed plus 497 new results, or 2,352 total.  It finished with
+`Result=success`, `ExecMainStatus=0`, and inactive/dead state; the transient
+unit had unloaded before the final poll, so the controller required this exact
+journal identity rather than accepting an anonymous missing unit.
+
+Transport recovery did not weaken that identity.  The original controller
+failed closed after a client-address change and retained runner
+`260806-073551-6bd0`, Linode `102365031`, and firewall `108778464`.  After the
+firewall source was refreshed to `73.145.241.253/32`, the self-disabling hidden
+task `Umlaut-CASC-J13-Recovery-20260806T095050Z` required clean synchronized
+`main` at `1a49c44a95da46dd4a5c56091af742bf19eeb8bf`, seven exact critical
+input hashes, and the original runner identities before every controller
+invocation.  Recovery controller PID `7332` adopted the unchanged service at
+2,244 results, PID `20284` re-adopted it at 2,308 after a later result-count
+SSH timeout, and PID `11080` finally re-adopted it at 2,334 after a separate
+status-probe timeout.  Before that final adoption, one bounded read-only probe
+returned MainPID `3991`, the same invocation, zero restarts, active/running
+state, and 2,333 results.  Every failed controller logged
+`runner_retained_for_recovery`; none restarted the service, captured a partial
+checkpoint, or deleted provider resources.
+
+Terminal capture removed zero incomplete result artifacts and regenerated the
+J13 and combined reports at exactly 2,352 records.  The ignored archive
+`.artifacts/casc-benchmark/j13-checkpoint-260806-073551-6bd0.tar.gz` is
+35,096,261 bytes with SHA-256
+`e8cbbf65825ea70ef7da0069774af4e8b349c0619731c6fe98d078a61cf8a415`.
+Its 13 regular outer members bind a unique sorted 2,352-result inventory,
+SHA-256
+`1edd4bee709492019db8fa74860324eddbd26342ff5d559fa3302a722a94787b`.
+The nested archive is 51,382,178 bytes with 7,144 regular members and SHA-256
+`39ffccdaaec5768aa010c3391ce1677ef1b209ecf311ee709a8baa5920f23226`.
+The captured process snapshot and service-property evidence hash respectively
+to `d450eb1d116c21ffabbfb0622ea2d5fed76122bcf935caae9d673c82eb5534b9`
+and `7da19ec1655ec6c1bb73446a04af7b75bec549e3e5f8d3f5d46eca0295e49e2a`.
+
+Strict independent validation reproduced contract
+`9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676`,
+contract-file SHA-256
+`4a66c48124cdfb89da5c17ac87229e599ae2dffd92976c0ff89804d362bc6075`,
+manifest SHA-256
+`939f8d03f0ceb0cbccd6377a01b605d84adeaa46e892a630513cccb82c825941`,
+1,176 Umlaut plus 1,176 Vampire records, and 2,352/2,700 J13 results.  It
+also reproduced the embedded combined boundary as 0/5,802 CASC-2025 plus
+2,352/2,700 CASC-J13, or 2,352/8,502 total, with all 66 official CSVs kept
+contextual.  J13 summary SHA-256 is
+`27c872ebd031f68b7cd5178eefbde734ed3686d4167e188b10d8f3b2b5cfa470`;
+combined summary SHA-256 is
+`89c984009d76f43b98ca9479c6260e15fa2e08cd7779e38c124e9929d29f7e6a`.
+The controller and separately invoked validation sidecars are byte-identical,
+2,328 bytes, with SHA-256
+`f77ee9985583156af1f7850ea6156afc464ac00bb8467c92486302c13f0efedd`.
+
+Reproduction from the repository root is:
+
+```powershell
+.\.venv\Scripts\python.exe -u `
+  experiments/2026-07-28-004-casc-benchmark-matrix/validate_casc_checkpoint.py `
+  --archive .artifacts/casc-benchmark/j13-checkpoint-260806-073551-6bd0.tar.gz `
+  --archive-sha256 e8cbbf65825ea70ef7da0069774af4e8b349c0619731c6fe98d078a61cf8a415 `
+  --manifest benchmarks/casc_2026_manifest.jsonl `
+  --run-name casc-j13-2026-089e06c8-v2 `
+  --contract-id 9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676 `
+  --expected-results 2352 `
+  --combined-run CASC-2025 benchmarks/casc_2025_manifest.jsonl `
+    casc30-2025-089e06c8-v2 `
+    e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa `
+  --combined-run CASC-J13 benchmarks/casc_2026_manifest.jsonl `
+    casc-j13-2026-089e06c8-v2 `
+    9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676 `
+  --output .artifacts/casc-benchmark/j13-checkpoint-260806-073551-6bd0.tar.gz.independent-validation.json
+.\.venv\Scripts\python.exe -u `
+  experiments/2026-07-28-004-casc-benchmark-matrix/plan_next_casc_resume.py `
+  --checkpoint .artifacts/casc-benchmark/j13-checkpoint-260806-073551-6bd0.tar.gz `
+  --checkpoint-sha256 e8cbbf65825ea70ef7da0069774af4e8b349c0619731c6fe98d078a61cf8a415 `
+  --inspect-only `
+  --output .artifacts/casc-benchmark/j13-2352-inspect-260806.json
+.\linode-runner.ps1 status
+.\linode-runner.ps1 check
+```
+
+Inspect-only output SHA-256
+`9c314f528e1902ee461be28ed3b6065c4fe00515c830d8804e5a265bbca39baa`
+selects outer and next release `j13` at exactly 2,352 results and status
+`resume_candidate`.  Only after `checkpoint_verified` did the controller
+delete Linode `102365031` and firewall `108778464`.  Fresh local and provider
+checks return `active: null`, `parked: []`, and zero restricted-reaper runners.
+The recovery task is disabled and its last result is zero; the launch log ends
+with `controller_invocation_completed` and `task_launch_completed`.
+
+Conclusion: the recovered successor is a complete, quiescent, independently
+reproducible checkpoint with safe provider teardown.  This accepts only this
+slice.  J13 still lacks 348 records, CASC-2025 still lacks all 5,802, and the
+matrix Bead remains in progress with 6,150 of 8,502 records outstanding.  A
+future guarded slice must continue J13 from this exact checkpoint before any
+CASC-2025 transition.
+
 ## Partial-checkpoint Umlaut failure audit
 
 Question: do the 77 Umlaut `error`/`crash` classifications in the independently
@@ -1537,6 +1643,16 @@ constant-false lambda and negation, and both are solved by multiple official
 J13 entrants.
 This distinct type-dispatch gap is now tracked by bug
 `E_Rust_Port-9jt.2.14` with a 400/400 THF acceptance boundary.
+The hash-bound proving probe now also accepts an explicit audit classification
+and exact expected selection count.  After runner teardown it can select the
+two `error` records from immutable audit
+`8457b397f123fef0bb8149acc9fbcceb1a4d8568f57bbcd6eeb64a6e1477beb7`
+and fail unless both repaired inputs enter production proving; its historical
+default remains the 73 `too_many_arguments` records.  Four focused selection
+tests cover multi-class audit-order preservation, exact-count rejection,
+duplicate rejection, and an empty requested class; the local no-prover smoke
+still selects exactly the two production errors and all 73 historical
+overapplication records.
 
 The crash is new: result
 `casc-runs/casc-j13-2026-089e06c8-v2/results/umlaut/fnq/0925-fnq-e124691e4d3d.json`
@@ -1571,6 +1687,61 @@ Get-FileHash -Algorithm SHA256 `
   'problems/casc_2026/FNQ/HWV063+1.p'
 rg -n 'SYO544\^1|SYO545\^1' cast_2026_results
 ```
+
+### Current-main static hardening draft
+
+Question: can the exact structural evidence identify guaranteed stack hazards
+without touching the runner owned by the active successor?  A represented-TSTP
+call-path audit found two such hazards.  The variable-list parsers formerly
+recurred once for every comma-separated binder, so the inner 32,896-variable
+list necessarily consumed 32,896 Rust frames before parsing the matrix.  The
+parser then built the 77,656-operand conjunction as a left-associated binary
+tree, and the first represented formula preprocessing passes recursively
+descended both that tree and the complete quantifier prefix.
+
+The unvalidated current working-tree draft addresses the complete exact-input
+route rather than only the first observed recursion.  TSTP and old-TPTP binder
+lists are parsed in a loop with one lexical variable environment and scoped
+declaration per binder, then reverse-wrapped into the same quantifier order.
+This restores names after both successful and failed parses and makes repeated
+same-sort names shadow rather than alias.  Associative
+TSTP conjunctions and disjunctions remain left-associated through 1,024
+operands for ordinary compatibility, while larger ordered chains are built as
+deterministic balanced trees.  Free-variable collection uses an explicit
+visit/leave stack with binder-identity counts.  Boolean-equality replacement,
+literal expansion, FOOL unrolling, simplification, definition discovery and
+copying, polarity marking, NNF, miniscope scanning and bound-aware copying,
+variable renaming, and Skolemization now peel and rebuild contiguous
+first-order quantifier prefixes iteratively.  Named-lambda renaming retains its
+existing single-binder copy behavior.
+
+Compact regressions exercise 16,384 binders under the default test-thread
+stack, a 16,384-operand associative chain whose connective depth is at most
+14, malformed-list environment cleanup, same-name shadowing, the core formula
+traversals, and Boolean-equality replacement.  Static inspection also found
+that exact HWV063+1 loses its 33,228 existential binders during Skolemization;
+only four universal binders reach later quantifier-shifting/CNF recursion, and
+the balanced matrix has logarithmic connective depth.  This falsifies the
+hypothesis that changing only the parser recursion is a sufficient fix, while
+providing a bounded reason the later untouched CNF stages should be safe.
+
+Reproducible local inspection commands (no Rust execution) are:
+
+```powershell
+Get-FileHash -Algorithm SHA256 `
+  'problems/casc_2026/FNQ/HWV063+1.p'
+rg -n `
+  'parse_quantified_tformula|tformula_collect_free_vars|tformula_rek_skolemize' `
+  src/terms/termbanks.rs src/clauses/clausefunc.rs
+git diff --check
+bd show E_Rust_Port-9jt.2.13 --json
+```
+
+Limit: this is static evidence, not acceptance evidence.  The active CASC
+controller still owns the only Ubuntu runner.  Exact current-main execution,
+focused and comprehensive tests, source/binary identities, time and peak
+memory, semantic/proof-output regressions, and any later runtime hazard remain
+pending a validated successor checkpoint and verified provider teardown.
 
 Conclusion: the immutable partial matrix has already separated known historical
 parser evidence from two actionable current gaps.  Neither new Bead is claimed
