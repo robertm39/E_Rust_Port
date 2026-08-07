@@ -58,8 +58,13 @@ class CascResumeControllerProbeTests(unittest.TestCase):
         self.assertIn('"exec",', helper)
         self.assertIn('"--timeout-seconds",', helper)
         self.assertIn("[string]$runnerProbeTimeoutSeconds", helper)
+        self.assertIn('"--retry-safe",', helper)
         self.assertLess(
             helper.index('"--timeout-seconds",'),
+            helper.index('"--retry-safe",'),
+        )
+        self.assertLess(
+            helper.index('"--retry-safe",'),
             helper.index('"--",'),
         )
 

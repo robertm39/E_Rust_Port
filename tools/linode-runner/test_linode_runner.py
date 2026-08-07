@@ -27,6 +27,7 @@ class FakeApi:
     def __init__(self, resources):
         self.resources = resources
         self.deleted = []
+        self.puts = []
 
     def get(self, path, allow_404=False):
         return self.resources.get(path)
@@ -34,6 +35,10 @@ class FakeApi:
     def delete(self, path, allow_404=False):
         self.deleted.append(path)
         self.resources.pop(path, None)
+
+    def put(self, path, payload):
+        self.puts.append((path, payload))
+        return {}
 
 
 class ProvisionApi:
@@ -297,10 +302,10 @@ class ExplicitTransferTests(unittest.TestCase):
             controller.write_text(
                 "import base64\n"
                 "import sys\n"
-                "assert sys.argv[1:5] == "
-                "['exec', '--timeout-seconds', '7', '--']\n"
-                "assert sys.argv[5] == '--encoded-command'\n"
-                "print(base64.b64decode(sys.argv[6]).decode('utf-8'))\n",
+                "assert sys.argv[1:6] == "
+                "['exec', '--timeout-seconds', '7', '--retry-safe', '--']\n"
+                "assert sys.argv[6] == '--encoded-command'\n"
+                "print(base64.b64decode(sys.argv[7]).decode('utf-8'))\n",
                 encoding="utf-8",
             )
             local_app_data = root / "local-app-data"
@@ -313,7 +318,8 @@ class ExplicitTransferTests(unittest.TestCase):
                 "$remote = @'\n"
                 f"{remote_command}\n"
                 "'@\n"
-                f"& '{copied_wrapper}' exec --timeout-seconds 7 -- $remote\n"
+                f"& '{copied_wrapper}' exec --timeout-seconds 7 "
+                "--retry-safe -- $remote\n"
                 "exit $LASTEXITCODE"
             )
             environment = os.environ.copy()
@@ -397,8 +403,8 @@ class InterruptedBootstrapRecoveryTests(unittest.TestCase):
         self.assertEqual(recovered["phase"], "ready")
         self.assertEqual(saved, recovered)
         self.assertEqual(saved["package_maintenance"], maintenance)
-        wait_for_ssh.assert_called_once_with(state)
-        read_maintenance.assert_called_once_with(state)
+        wait_for_ssh.assert_called_once_with(state, api=mock.ANY)
+        read_maintenance.assert_called_once_with(state, api=mock.ANY)
 
     def test_recovery_rejects_live_identity_mismatch_without_mutation(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -433,7 +439,7 @@ class InterruptedBootstrapRecoveryTests(unittest.TestCase):
             state = self.state()
             write_json(current, state)
 
-            def replace_active(_state: dict) -> dict:
+            def replace_active(_state: dict, **_kwargs) -> dict:
                 changed = dict(state)
                 changed["linode_id"] += 1
                 write_json(current, changed)
@@ -622,7 +628,341 @@ class InterruptedBootstrapRecoveryTests(unittest.TestCase):
         self.assertIn("PACKAGE_MAINTENANCE_LIFECYCLE_COMPLETE", lifecycle)
 
 
+class TransportRefreshTests(unittest.TestCase):
+    def state(self) -> dict:
+        return {
+            "run_id": "260806-143950-781d",
+            "label": "e-rust-codex-260806-143950-781d",
+            "lifecycle": "active",
+            "phase": "synced",
+            "linode_id": 102384868,
+            "firewall_id": 109420354,
+            "ipv4": "192.0.2.8",
+            "allow_cidr": "198.51.100.4/32",
+            "type": runner.HIGH_MEMORY_TYPE,
+            "region": "us-ord",
+            "image": "linode/ubuntu24.04",
+        }
+
+    def api(self, state: dict) -> FakeApi:
+        return FakeApi(
+            {
+                f"/linode/instances/{state['linode_id']}": {
+                    "label": state["label"],
+                    "status": "running",
+                    "ipv4": [state["ipv4"]],
+                    "type": state["type"],
+                    "region": state["region"],
+                    "image": state["image"],
+                },
+                f"/networking/firewalls/{state['firewall_id']}": {
+                    "label": state["label"],
+                    "status": "enabled",
+                },
+            }
+        )
+
+    def test_ip_drift_refreshes_only_the_exact_saved_firewall(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            current = root / "current.json"
+            state = self.state()
+            write_json(current, state)
+            api = self.api(state)
+            with (
+                mock.patch.object(runner, "CURRENT_STATE", current),
+                mock.patch.object(runner, "LIFECYCLE_LOCK", root / "lock"),
+                mock.patch.object(
+                    runner,
+                    "detect_public_ipv4",
+                    return_value="198.51.100.9/32",
+                ),
+            ):
+                changed = runner.reconcile_controller_ssh_access(api, state)
+
+            saved = json.loads(current.read_text(encoding="utf-8"))
+
+        self.assertTrue(changed)
+        self.assertEqual(state["allow_cidr"], "198.51.100.9/32")
+        self.assertEqual(saved["allow_cidr"], "198.51.100.9/32")
+        self.assertRegex(
+            saved["firewall_refreshed_at"],
+            r"^\d{4}-\d{2}-\d{2}T",
+        )
+        self.assertEqual(
+            api.puts,
+            [
+                (
+                    f"/networking/firewalls/{state['firewall_id']}/rules",
+                    runner.firewall_rules("198.51.100.9/32"),
+                )
+            ],
+        )
+
+    def test_unchanged_ip_avoids_provider_calls(self):
+        state = self.state()
+        api = mock.Mock()
+        with mock.patch.object(
+            runner,
+            "detect_public_ipv4",
+            return_value=state["allow_cidr"],
+        ):
+            changed = runner.reconcile_controller_ssh_access(api, state)
+
+        self.assertFalse(changed)
+        api.get.assert_not_called()
+        api.put.assert_not_called()
+
+    def test_refresh_rejects_changed_local_identity_before_provider_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            current = root / "current.json"
+            state = self.state()
+            changed = dict(state)
+            changed["firewall_id"] += 1
+            write_json(current, changed)
+            api = self.api(state)
+            with (
+                mock.patch.object(runner, "CURRENT_STATE", current),
+                mock.patch.object(runner, "LIFECYCLE_LOCK", root / "lock"),
+                mock.patch.object(
+                    runner,
+                    "detect_public_ipv4",
+                    return_value="198.51.100.9/32",
+                ),
+                self.assertRaisesRegex(runner.RunnerError, "identity changed"),
+            ):
+                runner.reconcile_controller_ssh_access(api, state)
+
+        self.assertEqual(api.puts, [])
+
+    def test_refresh_rejects_live_identity_before_firewall_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            current = root / "current.json"
+            state = self.state()
+            write_json(current, state)
+            api = self.api(state)
+            api.resources[f"/linode/instances/{state['linode_id']}"][
+                "label"
+            ] = "somebody-elses-runner"
+            with (
+                mock.patch.object(runner, "CURRENT_STATE", current),
+                mock.patch.object(runner, "LIFECYCLE_LOCK", root / "lock"),
+                mock.patch.object(
+                    runner,
+                    "detect_public_ipv4",
+                    return_value="198.51.100.9/32",
+                ),
+                self.assertRaisesRegex(runner.RunnerError, "live label"),
+            ):
+                runner.reconcile_controller_ssh_access(api, state)
+
+        self.assertEqual(api.puts, [])
+
+    def test_discovery_outage_uses_saved_access_but_forced_repair_fails_closed(self):
+        state = self.state()
+        api = mock.Mock()
+        failure = runner.RunnerError("public IP service unavailable")
+        with mock.patch.object(
+            runner,
+            "detect_public_ipv4",
+            side_effect=failure,
+        ):
+            self.assertFalse(
+                runner.reconcile_controller_ssh_access(api, state)
+            )
+            with self.assertRaisesRegex(runner.RunnerError, "unavailable"):
+                runner.reconcile_controller_ssh_access(api, state, force=True)
+
+        api.get.assert_not_called()
+        api.put.assert_not_called()
+
+    def test_retry_safe_timeout_forces_refresh_then_repeats_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            current = root / "current.json"
+            state = self.state()
+            write_json(current, state)
+            api = self.api(state)
+            timeout = subprocess.TimeoutExpired(cmd=["ssh"], timeout=90)
+            success = subprocess.CompletedProcess(
+                args=["ssh"], returncode=0, stdout="ActiveState=active\n", stderr=""
+            )
+            with (
+                mock.patch.object(runner, "CURRENT_STATE", current),
+                mock.patch.object(runner, "LIFECYCLE_LOCK", root / "lock"),
+                mock.patch.object(
+                    runner,
+                    "detect_public_ipv4",
+                    return_value=state["allow_cidr"],
+                ),
+                mock.patch.object(
+                    runner,
+                    "command_path",
+                    side_effect=lambda name: name,
+                ),
+                mock.patch.object(
+                    runner,
+                    "run_local",
+                    side_effect=[timeout, success],
+                ) as run_local,
+                mock.patch.object(runner.time, "sleep") as sleep,
+            ):
+                result = runner.ssh_command(
+                    state,
+                    "systemctl show casc.service",
+                    api=api,
+                    timeout=90,
+                    capture=True,
+                    retry_safe=True,
+                )
+
+        self.assertIs(result, success)
+        self.assertEqual(run_local.call_count, 2)
+        self.assertEqual(len(api.puts), 1)
+        sleep.assert_called_once_with(runner.TRANSPORT_RETRY_DELAY_SECONDS)
+
+    def test_retry_safe_ssh_transport_exit_repeats_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            current = root / "current.json"
+            state = self.state()
+            write_json(current, state)
+            api = self.api(state)
+            failure_result = subprocess.CompletedProcess(
+                args=["ssh"],
+                returncode=255,
+                stdout="",
+                stderr="ssh: connect to host timed out\n",
+            )
+            failure = runner.LocalCommandError(
+                ["ssh"],
+                failure_result,
+                captured=True,
+            )
+            success = subprocess.CompletedProcess(
+                args=["ssh"], returncode=0, stdout="ok\n", stderr=""
+            )
+            with (
+                mock.patch.object(runner, "CURRENT_STATE", current),
+                mock.patch.object(runner, "LIFECYCLE_LOCK", root / "lock"),
+                mock.patch.object(
+                    runner,
+                    "detect_public_ipv4",
+                    return_value=state["allow_cidr"],
+                ),
+                mock.patch.object(
+                    runner,
+                    "command_path",
+                    side_effect=lambda name: name,
+                ),
+                mock.patch.object(
+                    runner,
+                    "run_local",
+                    side_effect=[failure, success],
+                ) as run_local,
+                mock.patch.object(runner.time, "sleep"),
+            ):
+                result = runner.ssh_command(
+                    state,
+                    "systemctl show casc.service",
+                    api=api,
+                    capture=True,
+                    retry_safe=True,
+                )
+
+        self.assertIs(result, success)
+        self.assertEqual(run_local.call_count, 2)
+        self.assertEqual(len(api.puts), 1)
+
+    def test_retry_safe_remote_failure_is_not_a_transport_retry(self):
+        state = self.state()
+        api = self.api(state)
+        failure_result = subprocess.CompletedProcess(
+            args=["ssh"], returncode=1, stdout="", stderr="remote failed\n"
+        )
+        failure = runner.LocalCommandError(
+            ["ssh"],
+            failure_result,
+            captured=True,
+        )
+        with (
+            mock.patch.object(
+                runner,
+                "detect_public_ipv4",
+                return_value=state["allow_cidr"],
+            ),
+            mock.patch.object(
+                runner,
+                "command_path",
+                side_effect=lambda name: name,
+            ),
+            mock.patch.object(runner, "run_local", side_effect=failure) as run_local,
+            self.assertRaises(runner.LocalCommandError),
+        ):
+            runner.ssh_command(
+                state,
+                "systemctl show missing.service",
+                api=api,
+                capture=True,
+                retry_safe=True,
+            )
+
+        run_local.assert_called_once()
+        self.assertEqual(api.puts, [])
+
+    def test_non_retry_safe_timeout_never_repeats_an_ambiguous_command(self):
+        state = self.state()
+        api = self.api(state)
+        timeout = subprocess.TimeoutExpired(cmd=["ssh"], timeout=90)
+        with (
+            mock.patch.object(
+                runner,
+                "detect_public_ipv4",
+                return_value=state["allow_cidr"],
+            ),
+            mock.patch.object(
+                runner,
+                "command_path",
+                side_effect=lambda name: name,
+            ),
+            mock.patch.object(runner, "run_local", side_effect=timeout) as run_local,
+            self.assertRaises(subprocess.TimeoutExpired),
+        ):
+            runner.ssh_command(
+                state,
+                "start-mutating-workload",
+                api=api,
+                timeout=90,
+                capture=True,
+            )
+
+        run_local.assert_called_once()
+        self.assertEqual(api.puts, [])
+
+
 class RemoteExecDiagnosticsTests(unittest.TestCase):
+    def test_exec_retry_safe_flag_is_explicit(self):
+        result = subprocess.CompletedProcess(
+            args=["ssh"], returncode=0, stdout="", stderr=""
+        )
+        with (
+            mock.patch.object(runner, "LinodeApi"),
+            mock.patch.object(runner, "load_current", return_value={"run_id": "r"}),
+            mock.patch.object(runner, "ssh_command", return_value=result) as ssh,
+        ):
+            exit_code = runner.main(["exec", "--retry-safe", "--", "true"])
+
+        self.assertEqual(exit_code, 0)
+        ssh.assert_called_once_with(
+            {"run_id": "r"},
+            "true",
+            api=mock.ANY,
+            capture=True,
+            retry_safe=True,
+        )
+
     def test_exec_forwards_explicit_timeout_to_ssh(self):
         result = subprocess.CompletedProcess(
             args=["ssh"],
@@ -643,6 +983,7 @@ class RemoteExecDiagnosticsTests(unittest.TestCase):
         ssh.assert_called_once_with(
             {"run_id": "r"},
             "true",
+            api=mock.ANY,
             capture=True,
             timeout=7,
         )
@@ -684,6 +1025,7 @@ class RemoteExecDiagnosticsTests(unittest.TestCase):
         ssh.assert_called_once_with(
             {"run_id": "r"},
             "true",
+            api=mock.ANY,
             capture=True,
             timeout=7,
         )
@@ -765,6 +1107,7 @@ class RemoteExecDiagnosticsTests(unittest.TestCase):
         ssh.assert_called_once_with(
             {"run_id": "r"},
             remote_command,
+            api=mock.ANY,
             capture=True,
         )
 
@@ -804,6 +1147,7 @@ class RemoteExecDiagnosticsTests(unittest.TestCase):
         ssh.assert_called_once_with(
             {"run_id": "r"},
             "false",
+            api=mock.ANY,
             capture=True,
         )
         self.assertIn("remote stdout", stderr.getvalue())
@@ -833,6 +1177,7 @@ class RemoteExecDiagnosticsTests(unittest.TestCase):
         ssh.assert_called_once_with(
             {"run_id": "r"},
             "printf diagnostic",
+            api=mock.ANY,
             capture=True,
         )
         self.assertEqual(stdout.getvalue(), "remote stdout\n")

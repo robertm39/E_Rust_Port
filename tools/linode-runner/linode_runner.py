@@ -58,6 +58,10 @@ REMOTE_REAPER_ROOT = PurePosixPath("/root/.local/share/umlaut-linode-reaper")
 REMOTE_REAPER_SOURCE = REPO_ROOT / "tools" / "linode-runner" / "remote_reaper.py"
 REUSE_DISARM_GUARD = timedelta(seconds=30)
 DEFAULT_RECOVERY_GRACE_SECONDS = 900
+TRANSPORT_RETRY_DELAY_SECONDS = 2
+TRANSPORT_LIFECYCLES = frozenset(
+    {"active", "guarded-recovery", "parking", "parked"}
+)
 PACKAGE_MAINTENANCE_RECORD = REMOTE_ROOT / "package-maintenance-quiescence.json"
 PACKAGE_MAINTENANCE_UNITS = (
     "apt-daily.timer",
@@ -135,6 +139,28 @@ class ApiError(RunnerError):
         self.path = path
         self.status = status
         self.detail = detail
+
+
+class LocalCommandError(RunnerError):
+    """A local child-process failure with machine-readable exit metadata."""
+
+    def __init__(
+        self,
+        command: Sequence[str],
+        result: subprocess.CompletedProcess[str],
+        *,
+        captured: bool,
+    ):
+        detail = ""
+        if captured:
+            detail = f"\n{result.stdout}{result.stderr}".rstrip()
+        super().__init__(
+            f"Command failed with exit code {result.returncode}: {command[0]}{detail}"
+        )
+        self.command = tuple(command)
+        self.returncode = result.returncode
+        self.stdout = result.stdout if captured else ""
+        self.stderr = result.stderr if captured else ""
 
 
 def utc_now() -> datetime:
@@ -1092,7 +1118,11 @@ WantedBy=timers.target
     return service_text, timer_text
 
 
-def arm_remote_reaper(state: dict[str, Any]) -> None:
+def arm_remote_reaper(
+    state: dict[str, Any],
+    *,
+    api: LinodeApi | None = None,
+) -> None:
     token = reaper_token()
     assert token is not None
     service, timer, root = remote_reaper_names(state)
@@ -1102,6 +1132,7 @@ def arm_remote_reaper(state: dict[str, Any]) -> None:
         state,
         f"rm -rf {shlex.quote(str(remote_stage))} && "
         f"install -d -m 0700 {shlex.quote(str(remote_stage))}",
+        api=api,
         timeout=60,
     )
     with tempfile.TemporaryDirectory(prefix="umlaut-reaper-") as temporary:
@@ -1132,7 +1163,7 @@ def arm_remote_reaper(state: dict[str, Any]) -> None:
             local_path.write_text(contents, encoding="utf-8")
             if name == "token":
                 local_path.chmod(0o600)
-            scp_to(state, local_path, f"{remote_stage}/{name}")
+            scp_to(state, local_path, f"{remote_stage}/{name}", api=api)
     install = " && ".join(
         [
             f"install -d -m 0700 {shlex.quote(str(root))}",
@@ -1146,7 +1177,7 @@ def arm_remote_reaper(state: dict[str, Any]) -> None:
             f"systemctl enable --now {timer}",
         ]
     )
-    ssh_command(state, install, timeout=120)
+    ssh_command(state, install, api=api, timeout=120)
     state["remote_reaper"] = {
         "service": service,
         "timer": timer,
@@ -1169,7 +1200,11 @@ def disarm_remote_reaper(state: dict[str, Any]) -> None:
     state.pop("remote_reaper", None)
 
 
-def cleanup_remote_workspace(state: dict[str, Any]) -> None:
+def cleanup_remote_workspace(
+    state: dict[str, Any],
+    *,
+    api: LinodeApi | None = None,
+) -> None:
     uploaded = state.get("uploaded_files", [])
     uploaded_paths: list[str] = []
     paths = [
@@ -1222,7 +1257,7 @@ sleep 2
 terminate_workspace_processes KILL
 rm -rf -- {quoted}
 """
-    ssh_command(state, script, timeout=180)
+    ssh_command(state, script, api=api, timeout=180)
     state.pop("uploaded_files", None)
 
 
@@ -1250,12 +1285,7 @@ def run_local(
         check=False,
     )
     if result.returncode != 0:
-        detail = ""
-        if capture:
-            detail = f"\n{result.stdout}{result.stderr}".rstrip()
-        raise RunnerError(
-            f"Command failed with exit code {result.returncode}: {command[0]}{detail}"
-        )
+        raise LocalCommandError(command, result, captured=capture)
     return result
 
 
@@ -1314,6 +1344,73 @@ def detect_public_ipv4(override: str | None = None) -> str:
     return f"{address}/32"
 
 
+def require_same_runner_identity(
+    expected: dict[str, Any],
+    saved: dict[str, Any],
+) -> None:
+    """Require a caller's state to name the exact currently saved runner."""
+
+    for field in ("run_id", "label", "linode_id", "firewall_id", "ipv4"):
+        if expected.get(field) != saved.get(field):
+            raise RunnerError(
+                f"Active runner identity changed before SSH firewall refresh: {field}"
+            )
+
+
+def reconcile_controller_ssh_access(
+    api: LinodeApi,
+    state: dict[str, Any],
+    *,
+    force: bool = False,
+    state_path: Path | None = None,
+) -> bool:
+    """Repair a stale controller /32 before opening a new SSH connection.
+
+    Ordinary preflight remains usable when the public-IP discovery service is
+    temporarily unavailable: the already-authorized connection is still tried.
+    A forced retry is strict because it cannot safely repair access without a
+    newly observed address.
+    """
+
+    try:
+        allow_cidr = detect_public_ipv4()
+    except RunnerError:
+        if force:
+            raise
+        return False
+    if not force and state.get("allow_cidr") == allow_cidr:
+        return False
+
+    path = CURRENT_STATE if state_path is None else state_path
+    with lifecycle_lock():
+        saved = read_state_file(path)
+        require_same_runner_identity(state, saved)
+        if not force and saved.get("allow_cidr") == allow_cidr:
+            state["allow_cidr"] = allow_cidr
+            return False
+        validate_live_runner_identity(
+            api,
+            saved,
+            allowed_lifecycles=TRANSPORT_LIFECYCLES,
+        )
+        saved["allow_cidr"] = replace_firewall_rules(api, saved, allow_cidr)
+        saved["firewall_refreshed_at"] = iso_now()
+        saved["updated_at"] = iso_now()
+        atomic_write_json(path, saved)
+        state["allow_cidr"] = saved["allow_cidr"]
+        state["firewall_refreshed_at"] = saved["firewall_refreshed_at"]
+        state["updated_at"] = saved["updated_at"]
+    return True
+
+
+def retryable_ssh_transport_failure(error: BaseException) -> bool:
+    """Return whether an idempotent SSH command may repeat after this failure."""
+
+    return isinstance(error, subprocess.TimeoutExpired) or (
+        isinstance(error, LocalCommandError) and error.returncode == 255
+    )
+
+
 def ssh_options(state: dict[str, Any], *, connect_timeout: int = 10) -> list[str]:
     known_hosts = LOCAL_ROOT / f"known-hosts-{state['run_id']}"
     return [
@@ -1340,23 +1437,50 @@ def ssh_command(
     state: dict[str, Any],
     command: str,
     *,
+    api: LinodeApi | None = None,
     timeout: int | None = None,
     capture: bool = False,
+    retry_safe: bool = False,
+    state_path: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     remote = f"bash -lc {shlex.quote(command)}"
-    return run_local(
-        [
-            command_path("ssh"),
-            *ssh_options(state),
-            f"root@{state['ipv4']}",
-            remote,
-        ],
-        timeout=timeout,
-        capture=capture,
-    )
+    ssh = [
+        command_path("ssh"),
+        *ssh_options(state),
+        f"root@{state['ipv4']}",
+        remote,
+    ]
+    if api is not None:
+        reconcile_controller_ssh_access(api, state, state_path=state_path)
+    try:
+        return run_local(ssh, timeout=timeout, capture=capture)
+    except (RunnerError, subprocess.TimeoutExpired) as error:
+        if not retry_safe or not retryable_ssh_transport_failure(error):
+            raise
+        if api is None:
+            raise RunnerError(
+                "A retry-safe SSH command requires Linode API access"
+            ) from error
+        reconcile_controller_ssh_access(
+            api,
+            state,
+            force=True,
+            state_path=state_path,
+        )
+        time.sleep(TRANSPORT_RETRY_DELAY_SECONDS)
+        return run_local(ssh, timeout=timeout, capture=capture)
 
 
-def scp_to(state: dict[str, Any], source: Path, destination: str) -> None:
+def scp_to(
+    state: dict[str, Any],
+    source: Path,
+    destination: str,
+    *,
+    api: LinodeApi | None = None,
+    state_path: Path | None = None,
+) -> None:
+    if api is not None:
+        reconcile_controller_ssh_access(api, state, state_path=state_path)
     run_local(
         [
             command_path("scp"),
@@ -1368,8 +1492,17 @@ def scp_to(state: dict[str, Any], source: Path, destination: str) -> None:
     )
 
 
-def scp_from(state: dict[str, Any], source: str, destination: Path) -> None:
+def scp_from(
+    state: dict[str, Any],
+    source: str,
+    destination: Path,
+    *,
+    api: LinodeApi | None = None,
+    state_path: Path | None = None,
+) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if api is not None:
+        reconcile_controller_ssh_access(api, state, state_path=state_path)
     run_local(
         [
             command_path("scp"),
@@ -1412,12 +1545,18 @@ def validate_remote_upload_path(value: str) -> str:
     return remote_path
 
 
-def upload_file(state: dict[str, Any], source: Path, destination: str) -> None:
+def upload_file(
+    state: dict[str, Any],
+    source: Path,
+    destination: str,
+    *,
+    api: LinodeApi | None = None,
+) -> None:
     source = source.resolve()
     if not source.is_file():
         raise RunnerError(f"Upload source is not a file: {source}")
     remote_path = validate_remote_upload_path(destination)
-    scp_to(state, source, remote_path)
+    scp_to(state, source, remote_path, api=api)
     uploaded = state.setdefault("uploaded_files", [])
     if not isinstance(uploaded, list):
         raise RunnerError("Active runner state has invalid uploaded-files metadata")
@@ -1427,7 +1566,12 @@ def upload_file(state: dict[str, Any], source: Path, destination: str) -> None:
 
 
 def download_file(
-    state: dict[str, Any], source: str, destination: Path, *, overwrite: bool
+    state: dict[str, Any],
+    source: str,
+    destination: Path,
+    *,
+    overwrite: bool,
+    api: LinodeApi | None = None,
 ) -> None:
     source = validate_remote_file_path(source)
     destination = destination.resolve()
@@ -1435,7 +1579,7 @@ def download_file(
         raise RunnerError(
             f"Download destination already exists: {destination}; pass --overwrite"
         )
-    scp_from(state, source, destination)
+    scp_from(state, source, destination, api=api)
 
 
 def snapshot_metadata(repo_root: Path) -> dict[str, Any]:
@@ -1643,12 +1787,25 @@ def wait_for_linode(
     )
 
 
-def wait_for_ssh(state: dict[str, Any], timeout: int = 600) -> None:
+def wait_for_ssh(
+    state: dict[str, Any],
+    timeout: int = 600,
+    *,
+    api: LinodeApi | None = None,
+    state_path: Path | None = None,
+) -> None:
     deadline = time.monotonic() + timeout
     last_error = ""
     while time.monotonic() < deadline:
         try:
-            result = ssh_command(state, "true", timeout=20, capture=True)
+            result = ssh_command(
+                state,
+                "true",
+                api=api,
+                timeout=20,
+                capture=True,
+                state_path=state_path,
+            )
             if result.returncode == 0:
                 return
         except (RunnerError, subprocess.TimeoutExpired) as error:
@@ -1941,12 +2098,17 @@ def validate_package_maintenance_record(value: object) -> dict[str, Any]:
     return value
 
 
-def read_package_maintenance_state(state: dict[str, Any]) -> dict[str, Any]:
+def read_package_maintenance_state(
+    state: dict[str, Any],
+    *,
+    api: LinodeApi | None = None,
+) -> dict[str, Any]:
     """Read and validate the bootstrap completion record from a runner."""
 
     result = ssh_command(
         state,
         f"cat {shlex.quote(str(PACKAGE_MAINTENANCE_RECORD))}",
+        api=api,
         timeout=30,
         capture=True,
     )
@@ -1964,9 +2126,13 @@ def read_package_maintenance_state(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def bootstrap(state: dict[str, Any]) -> dict[str, Any]:
-    ssh_command(state, bootstrap_script(), timeout=1800)
-    return read_package_maintenance_state(state)
+def bootstrap(
+    state: dict[str, Any],
+    *,
+    api: LinodeApi | None = None,
+) -> dict[str, Any]:
+    ssh_command(state, bootstrap_script(), api=api, timeout=1800)
+    return read_package_maintenance_state(state, api=api)
 
 
 def recover_interrupted_bootstrap(
@@ -2033,8 +2199,8 @@ def recover_interrupted_bootstrap(
                 f"{live_value!r}"
             )
 
-    wait_for_ssh(state)
-    package_maintenance = read_package_maintenance_state(state)
+    wait_for_ssh(state, api=api)
+    package_maintenance = read_package_maintenance_state(state, api=api)
     with lifecycle_lock():
         current = load_current()
         if (
@@ -2055,12 +2221,16 @@ def recover_interrupted_bootstrap(
 def validate_live_runner_identity(
     api: LinodeApi,
     state: dict[str, Any],
+    *,
+    allowed_lifecycles: Iterable[str] = ("active", "guarded-recovery"),
 ) -> dict[str, Any]:
     """Require the saved runner to match its exact live provider resources."""
 
-    if state.get("lifecycle") not in {"active", "guarded-recovery"}:
+    allowed = frozenset(allowed_lifecycles)
+    if state.get("lifecycle") not in allowed:
         raise RunnerError(
-            "Runner identity validation requires an active or guarded runner"
+            "Runner identity validation rejected lifecycle "
+            f"{state.get('lifecycle')!r}"
         )
     label = state.get("label")
     if not isinstance(label, str) or not is_managed_label(label):
@@ -2190,11 +2360,11 @@ def provision(
         state["phase"] = "waiting-for-ssh"
         save_current(state)
         print(f"Waiting for SSH at {state['ipv4']}", flush=True)
-        wait_for_ssh(state)
+        wait_for_ssh(state, api=api)
         state["phase"] = "bootstrapping"
         save_current(state)
         print("Installing the Linux build and Callgrind toolchain", flush=True)
-        state["package_maintenance"] = bootstrap(state)
+        state["package_maintenance"] = bootstrap(state, api=api)
         state["phase"] = "ready"
         save_current(state)
         return state
@@ -2349,6 +2519,9 @@ def activate_parked_runner(
         state["ipv4"] = addresses[0]
     state["allow_cidr"] = replace_firewall_rules(api, state, allow_ip)
     atomic_write_json(path, state)
+    # acquire_runner holds the lifecycle lock during activation. The exact
+    # firewall was refreshed and SSH-tested immediately above, so these calls
+    # deliberately avoid recursively taking that lock through transport preflight.
     wait_for_ssh(state)
     disarm_remote_reaper(state)
     state["lifecycle"] = "active"
@@ -2478,7 +2651,7 @@ def park_runner(api: LinodeApi, state: dict[str, Any]) -> bool:
     trusted_now = api.trusted_now()
     delete_at = billing_delete_at(parse_time(created), trusted_now)
     try:
-        cleanup_remote_workspace(state)
+        cleanup_remote_workspace(state, api=api)
     except BaseException:
         delete_state_resources(api, state)
         raise
@@ -2504,7 +2677,7 @@ def park_runner(api: LinodeApi, state: dict[str, Any]) -> bool:
         existing = remaining_parked_states()
     try:
         sync_reaper_access(api, [*existing, state])
-        arm_remote_reaper(state)
+        arm_remote_reaper(state, api=api)
     except BaseException:
         try:
             sync_reaper_access(
@@ -2574,7 +2747,7 @@ def guard_recovery(
         live = validate_live_runner_identity(api, state)
         state["allow_cidr"] = replace_firewall_rules(api, state, allow_ip)
         save_current(state)
-        wait_for_ssh(state)
+        wait_for_ssh(state, api=api)
 
         created = live.get("created")
         if not isinstance(created, str):
@@ -2614,7 +2787,7 @@ def guard_recovery(
         state["phase"] = "arming-recovery-reapers"
         save_current(state)
         sync_reaper_access(api, [*existing, state])
-        arm_remote_reaper(state)
+        arm_remote_reaper(state, api=api)
         state["phase"] = "guarded-recovery"
         save_current(state)
     except BaseException:
@@ -2647,7 +2820,12 @@ def guard_recovery(
     return True
 
 
-def sync_source(state: dict[str, Any], repo_root: Path = REPO_ROOT) -> dict[str, Any]:
+def sync_source(
+    state: dict[str, Any],
+    repo_root: Path = REPO_ROOT,
+    *,
+    api: LinodeApi | None = None,
+) -> dict[str, Any]:
     state["phase"] = "packaging-source"
     save_current(state)
     with tempfile.TemporaryDirectory(prefix="e-rust-linode-") as temporary:
@@ -2660,7 +2838,7 @@ def sync_source(state: dict[str, Any], repo_root: Path = REPO_ROOT) -> dict[str,
         )
         state["phase"] = "uploading-source"
         save_current(state)
-        scp_to(state, archive, remote_archive)
+        scp_to(state, archive, remote_archive, api=api)
         install_script = f"""
 set -Eeuo pipefail
 test -f {shlex.quote(remote_archive)}
@@ -2676,7 +2854,7 @@ mv {REMOTE_ROOT}/incoming {REMOTE_ROOT}/source
 rm -rf {REMOTE_ROOT}/previous
 rm -f {shlex.quote(remote_archive)}
 """
-        ssh_command(state, install_script, timeout=900)
+        ssh_command(state, install_script, api=api, timeout=900)
     state["snapshot"] = metadata
     state["phase"] = "synced"
     save_current(state)
@@ -2693,7 +2871,11 @@ def begin_workload(state: dict[str, Any]) -> str:
     return identifier
 
 
-def run_remote_workload(state: dict[str, Any]) -> None:
+def run_remote_workload(
+    state: dict[str, Any],
+    *,
+    api: LinodeApi | None = None,
+) -> None:
     commit = state.get("snapshot", {}).get("eprover_commit") or "worktree-snapshot"
     script_path = (
         f"{REMOTE_ROOT}/source/tools/linode-runner/remote_run.sh"
@@ -2716,13 +2898,17 @@ def run_remote_workload(state: dict[str, Any]) -> None:
     )
     state["phase"] = "running-workload"
     save_current(state)
-    ssh_command(state, command, timeout=14400)
+    ssh_command(state, command, api=api, timeout=14400)
     state["remote_artifact_path"] = artifact_path
     state["phase"] = "workload-complete"
     save_current(state)
 
 
-def collect_artifacts(state: dict[str, Any]) -> Path:
+def collect_artifacts(
+    state: dict[str, Any],
+    *,
+    api: LinodeApi | None = None,
+) -> Path:
     workload_id = state.get("workload_id")
     if not isinstance(workload_id, str):
         raise RunnerError("Active runner has no workload ID")
@@ -2736,16 +2922,17 @@ def collect_artifacts(state: dict[str, Any]) -> Path:
         f"tar -C {shlex.quote(remote_artifacts)} -czf "
         f"{shlex.quote(remote_archive)} ."
     )
-    ssh_command(state, pack, timeout=900)
+    ssh_command(state, pack, api=api, timeout=900)
     local_dir = ARTIFACT_ROOT / workload_id
     local_archive = local_dir / "artifacts.tar.gz"
-    scp_from(state, remote_archive, local_archive)
+    scp_from(state, remote_archive, local_archive, api=api)
     safe_extract(local_archive, local_dir)
     local_archive.unlink()
     ssh_command(
         state,
         f"rm -f {shlex.quote(remote_archive)} && "
         f"rm -rf {shlex.quote(str(remote_artifacts))}",
+        api=api,
         timeout=60,
     )
     state["local_artifact_path"] = str(local_dir)
@@ -3055,6 +3242,11 @@ def parser() -> argparse.ArgumentParser:
         type=int,
         help="bound the local SSH invocation to this many seconds",
     )
+    execute.add_argument(
+        "--retry-safe",
+        action="store_true",
+        help="retry one SSH transport failure; command must be safe to repeat",
+    )
     execute.add_argument("remote_command", nargs=argparse.REMAINDER)
     refresh = commands.add_parser(
         "refresh-ip", help="replace the firewall SSH source address"
@@ -3154,11 +3346,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif arguments.command == "sync":
             state = load_current()
-            metadata = sync_source(state)
+            metadata = sync_source(state, api=api)
             print(f"Snapshot uploaded: {metadata['archive_sha256']}")
         elif arguments.command == "upload":
             upload_file(
-                load_current(), arguments.local_path, arguments.remote_path
+                load_current(),
+                arguments.local_path,
+                arguments.remote_path,
+                api=api,
             )
             print(f"Uploaded {arguments.local_path} to {arguments.remote_path}")
         elif arguments.command == "download":
@@ -3167,6 +3362,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 arguments.remote_path,
                 arguments.local_path,
                 overwrite=arguments.overwrite,
+                api=api,
             )
             print(f"Downloaded {arguments.remote_path} to {arguments.local_path}")
         elif arguments.command == "exec":
@@ -3199,7 +3395,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise RunnerError("Encoded remote command is empty")
             else:
                 remote_command = " ".join(remote_arguments)
-            ssh_arguments: dict[str, Any] = {"capture": True}
+            ssh_arguments: dict[str, Any] = {
+                "api": api,
+                "capture": True,
+            }
+            if arguments.retry_safe:
+                ssh_arguments["retry_safe"] = True
             if arguments.timeout_seconds is not None:
                 ssh_arguments["timeout"] = arguments.timeout_seconds
             result = ssh_command(state, remote_command, **ssh_arguments)
@@ -3290,16 +3491,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     image=arguments.image,
                 )
                 print(f"Using {'reused' if reused else 'new'} Linode {state['linode_id']}")
-                sync_source(state)
+                sync_source(state, api=api)
                 begin_workload(state)
-                run_remote_workload(state)
-                local_artifacts = collect_artifacts(state)
+                run_remote_workload(state, api=api)
+                local_artifacts = collect_artifacts(state, api=api)
                 print(f"Artifacts collected at {local_artifacts}")
             except BaseException as error:
                 workload_error = error
                 if state is not None:
                     try:
-                        collect_artifacts(state)
+                        collect_artifacts(state, api=api)
                     except Exception as collect_error:
                         print(
                             f"Could not collect partial artifacts: {collect_error}",

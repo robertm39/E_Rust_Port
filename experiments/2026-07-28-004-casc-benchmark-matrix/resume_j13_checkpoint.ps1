@@ -696,6 +696,7 @@ function Invoke-RunnerProbe {
         "exec",
         "--timeout-seconds",
         [string]$runnerProbeTimeoutSeconds,
+        "--retry-safe",
         "--",
         $RemoteCommand
     )

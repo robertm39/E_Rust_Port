@@ -203,21 +203,27 @@ $pythonRunnerArguments = $RunnerArguments
 if ($Command -eq "exec") {
     $remoteArguments = @($RunnerArguments)
     $execArguments = @()
-    if (
-        $remoteArguments.Count -gt 0 -and
-        $remoteArguments[0] -eq "--timeout-seconds"
-    ) {
-        if ($remoteArguments.Count -lt 2) {
-            throw "--timeout-seconds requires a value"
+    while ($remoteArguments.Count -gt 0) {
+        if ($remoteArguments[0] -eq "--timeout-seconds") {
+            if ($remoteArguments.Count -lt 2) {
+                throw "--timeout-seconds requires a value"
+            }
+            $execArguments += @(
+                "--timeout-seconds",
+                $remoteArguments[1]
+            )
+            $remoteArguments = @($remoteArguments | Select-Object -Skip 2)
+            continue
         }
-        $execArguments = @(
-            "--timeout-seconds",
-            $remoteArguments[1]
-        )
-        $remoteArguments = @($remoteArguments | Select-Object -Skip 2)
-    }
-    if ($remoteArguments.Count -gt 0 -and $remoteArguments[0] -eq "--") {
-        $remoteArguments = @($remoteArguments | Select-Object -Skip 1)
+        if ($remoteArguments[0] -eq "--retry-safe") {
+            $execArguments += "--retry-safe"
+            $remoteArguments = @($remoteArguments | Select-Object -Skip 1)
+            continue
+        }
+        if ($remoteArguments[0] -eq "--") {
+            $remoteArguments = @($remoteArguments | Select-Object -Skip 1)
+        }
+        break
     }
     if ($remoteArguments.Count -eq 0) {
         throw "Provide a remote command after 'exec --'"

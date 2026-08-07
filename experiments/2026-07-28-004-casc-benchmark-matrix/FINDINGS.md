@@ -1844,6 +1844,77 @@ Scheduler cases, Python compilation, PowerShell parsing, and `git diff
 --check`.  The campaign remains incomplete by design; this incident neither
 advances the validated count beyond 2,352 nor closes the matrix Bead.
 
+## Automatic controller-IP recovery
+
+Question: can a long-running controller survive a change to its public IPv4
+without weakening the SSH firewall or risking duplicate workload commands?
+The prior cost guard bounded retention after a transport failure, but ordinary
+SSH and SCP calls still trusted the `/32` saved at provisioning time.
+
+The Linode runner transport now performs a silent public-IPv4 preflight before
+each managed SSH or SCP connection.  If the observed `/32` differs, it takes
+the lifecycle lock, requires the caller to match the exact saved run, label,
+Linode ID, firewall ID, and Linode IPv4, validates both live provider resources
+and their managed labels/status, then replaces only the exact firewall rules
+and atomically persists `allow_cidr` plus `firewall_refreshed_at`.  An outage of
+the public-IP discovery service does not break an already-authorized
+connection; a forced repair fails closed because it cannot safely guess an
+address.  Unchanged addresses make no provider calls.
+
+The CASC controller marks only its bounded, read-only service and inventory
+probes with `linode-runner exec --retry-safe`.  A timeout or SSH transport exit
+255 then causes one forced exact firewall reconciliation and one repeat after
+a two-second propagation delay.  General `exec`, solver launch, capture,
+upload, and download operations remain non-retrying, so an ambiguous
+disconnect cannot execute a state-changing command twice.  The PowerShell
+wrapper preserves `--retry-safe` on the controller side of its base64 command
+boundary.
+
+Reproduction commands from the repository root were:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover `
+  -s tools\linode-runner -p test_*.py
+.\.venv\Scripts\python.exe -m unittest discover `
+  -s experiments\2026-07-28-004-casc-benchmark-matrix -p test_*.py
+.\.venv\Scripts\python.exe -m py_compile `
+  tools\linode-runner\linode_runner.py `
+  tools\linode-runner\test_linode_runner.py `
+  experiments\2026-07-28-004-casc-benchmark-matrix\test_resume_j13_checkpoint.py
+$files = @(
+  'linode-runner.ps1',
+  'experiments\2026-07-28-004-casc-benchmark-matrix\resume_j13_checkpoint.ps1'
+)
+foreach ($file in $files) {
+  $tokens = $null
+  $errors = $null
+  [System.Management.Automation.Language.Parser]::ParseFile(
+    (Resolve-Path $file), [ref]$tokens, [ref]$errors
+  ) | Out-Null
+  if ($errors.Count -gt 0) { throw ($errors -join "`n") }
+}
+git diff --check
+.\linode-runner.ps1 status
+.\linode-runner.ps1 gc --older-than-hours 1
+```
+
+All 162 Linode-runner tests passed with six platform/dependency skips, and all
+60 CASC controller, planner, scheduler, report, and validator tests passed.
+Regressions falsify stale local identity, mismatched live identity, unnecessary
+provider writes for an unchanged address, public-IP discovery failure, wrapper
+option corruption, and unsafe retry of a timed-out mutating command.  The exact
+incident shape—a retry-safe 90-second status timeout—forces one firewall refresh
+and then succeeds on its single repeat.  Python compilation, both PowerShell
+parsers, and `git diff --check` passed.  Final read-only provider evidence was
+`active: null`, no parked runners, and no stale managed resources.
+
+Conclusion: controller public-IP drift is now repaired before the next normal
+transport connection, while the guarded-recovery reapers remain the independent
+cost backstop.  This removes the observed `/32` failure mode but cannot make an
+internet connection infallible; a sustained network or provider outage still
+enters the existing bounded recovery/deletion path.  No runner was provisioned
+and the authoritative campaign count remains 2,352.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
