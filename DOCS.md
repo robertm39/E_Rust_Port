@@ -2,6 +2,9 @@
 
 Agent-made documentation belongs in this file and in the documentation locations linked from this file. Do not modify `AGENTS.md`; add or update agent-facing documentation here instead.
 
+Repository-wide agent-made operational rules are in
+[`RULES.md`](RULES.md).
+
 ## Project Overview
 
 The public-facing introduction and source-build quick start are in
