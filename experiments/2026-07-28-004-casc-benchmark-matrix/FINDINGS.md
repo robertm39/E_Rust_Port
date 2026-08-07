@@ -1915,6 +1915,133 @@ internet connection infallible; a sustained network or provider outage still
 enters the existing bounded recovery/deletion path.  No runner was provisioned
 and the authoritative campaign count remains 2,352.
 
+## Verified guarded J13 checkpoint at 2,521 results
+
+Question: did the first production slice using automatic controller-IP repair
+preserve the exact solver-service identity, produce a fully reproducible
+successor checkpoint, and delete only its exact managed provider resources?
+The answer is yes.  The authorized plan
+`.artifacts/casc-benchmark/j13-2352-next-resume-plan-260807T033910Z.json`,
+SHA-256
+`4e501493f8cf55fd2a2773779c4d85325df695a58e256f96bc7d333c4e3e4fc5`,
+launched runner `260807-034544-4a12`, label
+`e-rust-codex-260807-034544-4a12`, Linode `102413430`, and firewall
+`110411448`.  The uploaded source archive SHA-256 was
+`f82b31eabfd730e37f2a809c2e4086fcc42c87f216f654b156bcb71c20f3f64e`;
+package-maintenance quiescence remained bound to SHA-256
+`287c6d8a6044f59732b8d40f9ffaea8f4ec8a49e34dd059f4e9143c309de80a2`.
+All checkpoint, corpus, binary, contract, cgroup-v2, and maintenance preflights
+passed before service `casc-j13-v2-resume-260807-034544-4a12.service`
+started with MainPID `3997`, invocation
+`ec9f3f1e75ac4741b17f8e395a49fa24`, and zero restarts.
+
+The service retained those identities throughout the slice.  Its terminal
+journal has one boot, `ba12f134b45d4b09bc1535eb25ffe188`, and one
+invocation.  Sequence `19886` reports contract
+`9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676`
+with 2,352 resumed plus 169 new records; sequence `19887` is the unique
+systemd success record.  Final properties are `Result=success`,
+`ExecMainStatus=0`, `NRestarts=0`, and inactive/dead.  Terminal capture removed
+zero incomplete artifact pairs and regenerated the partial J13 and combined
+reports at exactly 2,521 records.
+
+The ignored archive is
+`.artifacts/casc-benchmark/j13-checkpoint-260807-034544-4a12.tar.gz`:
+36,459,474 bytes with SHA-256
+`94d6591ba7af1062fe929c8ddd25d358a98d73aee68827b4ab69bf6ddfd1c50e`.
+Its 13 regular outer members bind 12 hashes and a unique, sorted 2,521-path
+result inventory, SHA-256
+`a60878d4985a5b637a8acd68bbf171fd74d177d60b8380c9e796e12b83e38888`.
+The nested archive is 52,780,339 bytes with 7,653 regular members and SHA-256
+`07b128e4b51f0534c3bcfe3866f42e0a3f91d57d6ce233151a03922994611122`.
+Captured process and service-property evidence hash respectively to
+`a56f8f5a66b7c9df4a82d07c0a05dd977f472cf1c2b288a8032578475d3f6ae5`
+and `7f14472be325fab8015b9264197c43bdbdcf2fc2e3285b80394331b63f27c638`.
+
+Strict independent validation reproduced contract-file SHA-256
+`4a66c48124cdfb89da5c17ac87229e599ae2dffd92976c0ff89804d362bc6075`,
+manifest SHA-256
+`939f8d03f0ceb0cbccd6377a01b605d84adeaa46e892a630513cccb82c825941`,
+1,261 Umlaut plus 1,260 Vampire records, and 2,521/2,700 J13 results.  It
+also reproduced the embedded combined boundary as 0/5,802 CASC-2025 plus
+2,521/2,700 CASC-J13, or 2,521/8,502 total, with all 66 official CSVs
+contextual and every report acceptance surface present.  J13 summary SHA-256
+is `f35e0bc47429881c8be0b4607bc994f06d12ad258df52c0eaf3412aee2bc34cb`;
+combined summary SHA-256 is
+`4d813eb9ac1967e74da69ac6c68d8f04152646552d02237f26c2e7c4ec95b63b`.
+Controller and independent validation sidecars are byte-identical, 2,328
+bytes, with SHA-256
+`b5e67312e995493180afed3c6c067c3c91648f06d1eb75e0d98bb6740365fe48`.
+
+Reproduction from the repository root is:
+
+```powershell
+.\.venv\Scripts\python.exe -u `
+  experiments/2026-07-28-004-casc-benchmark-matrix/validate_casc_checkpoint.py `
+  --archive .artifacts/casc-benchmark/j13-checkpoint-260807-034544-4a12.tar.gz `
+  --archive-sha256 94d6591ba7af1062fe929c8ddd25d358a98d73aee68827b4ab69bf6ddfd1c50e `
+  --manifest benchmarks/casc_2026_manifest.jsonl `
+  --run-name casc-j13-2026-089e06c8-v2 `
+  --contract-id 9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676 `
+  --expected-results 2521 `
+  --combined-run CASC-2025 benchmarks/casc_2025_manifest.jsonl `
+    casc30-2025-089e06c8-v2 `
+    e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa `
+  --combined-run CASC-J13 benchmarks/casc_2026_manifest.jsonl `
+    casc-j13-2026-089e06c8-v2 `
+    9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676 `
+  --output .artifacts/casc-benchmark/j13-checkpoint-260807-034544-4a12.tar.gz.independent-validation.json
+.\.venv\Scripts\python.exe -u `
+  experiments/2026-07-28-004-casc-benchmark-matrix/plan_next_casc_resume.py `
+  --checkpoint .artifacts/casc-benchmark/j13-checkpoint-260807-034544-4a12.tar.gz `
+  --checkpoint-sha256 94d6591ba7af1062fe929c8ddd25d358a98d73aee68827b4ab69bf6ddfd1c50e `
+  --inspect-only `
+  --output .artifacts/casc-benchmark/j13-2521-inspect-260807.json
+.\linode-runner.ps1 status
+.\linode-runner.ps1 check
+.\linode-runner.ps1 gc --older-than-hours 1
+```
+
+As an independent falsification check, the archive was extracted under
+`C:\tmp\umlaut-casc-audit-260807-034544-4a12`.  PowerShell verified all 12
+outer hashes, exact agreement between the outer inventory and 2,521 result
+JSON paths, 2,521 unique solver/problem coordinates, and all 5,042 referenced
+stdout/stderr streams by content hash.  It found zero missing, mismatched,
+duplicate, or orphan streams.  All 18 session records are present; 34
+historical results report `orphan_cleanup_required=true`, which records
+successful per-run cleanup rather than surviving residue.  The capture has
+174 single-boot/single-invocation journal records, one terminal success record,
+no standalone batch/Umlaut/Vampire process, and empty `cgroup-residue.txt` and
+`solver-units.txt`.
+
+The controller verified the archive before deleting exact Linode `102413430`
+and firewall `110411448`, then recorded `managed_resources_deleted`.  Fresh
+runner status is `active: null` with no parked runner; provider check reports
+zero restricted-reaper resources; dry GC finds no stale managed resource.  The
+self-disabled task `Umlaut-CASC-J13-Resume-20260807T034448Z` has last result
+zero, and its launch log ends with `controller_invocation_completed` followed
+by `task_launch_completed`.
+
+Inspect-only output
+`.artifacts/casc-benchmark/j13-2521-inspect-260807.json`, SHA-256
+`8dc5e6c9b4a47c61992a3e1b8a4f73cf82ecf8601dd1fedc31d47342e001c38e`,
+selects outer and next release `j13` at exactly 2,521 results with status
+`resume_candidate`.  Fresh nonmutating successor plan
+`.artifacts/casc-benchmark/j13-2521-next-resume-plan-260807T0807Z.json`,
+SHA-256
+`0f97d83278749a6e658f231ba110a0e7984b855d4c5037a69890173905b76de4`,
+observed 172,800 allowance seconds at `2026-08-07T08:08:27Z` against a
+14,700-second service requirement (18,000 billed seconds) and reports
+`ready_to_arm`.  It binds release `j13`, this exact checkpoint and hash,
+initial count 2,521, and a 14,400-second batch wall.  No scheduled task or
+runner was created.
+
+Conclusion: this is a complete, quiescent, independently reproducible
+successor with safe provider teardown.  It accepts only this slice.  J13 still
+lacks 179 records, CASC-2025 still lacks all 5,802, and the matrix Bead remains
+in progress with 5,981/8,502 records outstanding.  The next guarded slice must
+continue J13 from this exact checkpoint before any CASC-2025 transition.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and
