@@ -446,6 +446,28 @@ for it to disappear, and then removes the firewall.
 
 ## Failure recovery and stale-resource cleanup
 
+An active workload may be retained for diagnosis or checkpoint capture only
+behind a hard deletion lease:
+
+```powershell
+.\linode-runner.ps1 guard-recovery --grace-seconds 900
+```
+
+The command revalidates the exact saved Linode and firewall, refreshes the
+SSH `/32`, and preserves the remote workspace without restarting the workload.
+Its deletion deadline is the earlier of the requested grace interval and the
+current paid-hour cutoff. Both the Windows Scheduled Task and restricted
+remote systemd reaper are armed. The lifecycle remains in `current.json` as
+`guarded-recovery`, so new acquisition is refused while `exec`, `download`,
+and exact controller adoption remain available. Repeating the command never
+extends its deadline.
+
+Guard setup is fail-closed. If live identity, firewall refresh, SSH,
+restricted access, the remote reaper, or the local Scheduled Task cannot be
+verified, the exact active Linode and firewall are deleted immediately. CASC
+controllers use this command after any post-launch failure instead of leaving
+an unbounded paid runner.
+
 If the local PowerShell controller is interrupted while a fresh runner is in
 the `bootstrapping` phase, first inspect `status`.  When the exact saved Linode
 and firewall are still live and the remote bootstrap completed, recover the

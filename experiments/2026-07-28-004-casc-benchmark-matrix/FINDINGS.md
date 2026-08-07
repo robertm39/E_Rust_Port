@@ -1806,6 +1806,44 @@ exact-input, and comprehensive acceptance evidence.  This does not complete
 the campaign: J13 still lacks 348 records and must resume from the verified
 2,352-result checkpoint before CASC-2025 starts.
 
+## Cost-bound teardown after the 2,416-result transport failure
+
+Question: could the retained J13 runner be salvaged without crossing another
+rounded billing hour, and how is the same failure now prevented from retaining
+a paid runner indefinitely?  The controller last verified service
+`casc-j13-v2-resume-260806-143950-781d.service` at 2,416/2,700 results,
+MainPID `3968`, invocation `6bb6df0701a54abf92c97af9bdaaaea5`, and zero
+restarts.  The next exact `systemctl show` probe timed out after the client
+address changed, so the old controller failed closed and retained run
+`260806-143950-781d`.
+
+The recovery attempt began inside the five-minute guard before the next
+Linode-provided hourly boundary.  There was no longer enough time to arm a
+15-minute salvage lease.  Following the preregistered cost-first rule, no SSH
+refresh, solver restart, or unverified capture was attempted.  The exact saved
+Linode `102384868` and firewall `109420354` were deleted at
+`2026-08-07T02:36:22Z`, before the `02:40:20Z` boundary.  Provider `status`
+then reported `active: null` and no parked runners; a dry `gc` reported no
+stale managed resources.  The last authoritative archive therefore remains
+the independently validated 2,352-result checkpoint with SHA-256
+`e8cbbf65825ea70ef7da0069774af4e8b349c0619731c6fe98d078a61cf8a415`.
+
+The permanent controller now replaces unbounded retention with
+`linode-runner guard-recovery --grace-seconds 900`.  It revalidates exact live
+resource identity, refreshes only the saved firewall `/32`, preserves the
+workspace, and sets a non-extendable deadline at the earlier of 15 minutes or
+the current paid-hour cutoff.  Both the restricted remote systemd reaper and
+the hidden Windows Scheduled Task are required.  Failure to validate or arm
+the guard falls back to immediate exact deletion, and new acquisition remains
+blocked while lifecycle `guarded-recovery` exists.  Immediate deletion also
+reconciles restricted reaper access for any unrelated parked leases.
+
+Validation passed 110 focused Linode/CASC controller tests (five environment
+skips), 60 complete CASC experiment tests including real synthetic Task
+Scheduler cases, Python compilation, PowerShell parsing, and `git diff
+--check`.  The campaign remains incomplete by design; this incident neither
+advances the validated count beyond 2,352 nor closes the matrix Bead.
+
 ## Remaining acceptance boundary
 
 This smoke validates program construction, separate ignored inputs, binary and

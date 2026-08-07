@@ -12,6 +12,7 @@ param(
         "download",
         "exec",
         "refresh-ip",
+        "guard-recovery",
         "run",
         "down",
         "status",
@@ -102,12 +103,24 @@ function Sync-LocalReaperTasks {
         -UserId $currentUser `
         -LogonType Interactive `
         -RunLevel Limited
+    $reaperStates = @()
     foreach ($stateFile in $stateFiles) {
         $state = Get-Content -LiteralPath $stateFile.FullName -Raw |
             ConvertFrom-Json
         if ($state.lifecycle -ne "parked") {
             throw "Invalid parked lifecycle in $($stateFile.FullName)"
         }
+        $reaperStates += $state
+    }
+    $currentStatePath = Join-Path $runnerStateRoot "current.json"
+    if (Test-Path -LiteralPath $currentStatePath -PathType Leaf) {
+        $currentState = Get-Content -LiteralPath $currentStatePath -Raw |
+            ConvertFrom-Json
+        if ($currentState.lifecycle -eq "guarded-recovery") {
+            $reaperStates += $currentState
+        }
+    }
+    foreach ($state in $reaperStates) {
         $linodeId = [int64]$state.linode_id
         $leaseId = [string]$state.lease_id
         if ($linodeId -le 0 -or $leaseId -notmatch '^[0-9a-f]{32}$') {
@@ -262,7 +275,7 @@ finally {
     }
 }
 
-if ($Command -in @("up", "down", "run", "reap")) {
+if ($Command -in @("up", "down", "guard-recovery", "run", "reap")) {
     try {
         Sync-LocalReaperTasks
     }
@@ -270,6 +283,17 @@ if ($Command -in @("up", "down", "run", "reap")) {
         [Console]::Error.WriteLine(
             "URGENT: could not synchronize local reaper tasks: $($_.Exception.Message)"
         )
+        if ($Command -eq "guard-recovery") {
+            [Console]::Error.WriteLine(
+                "Recovery guard is incomplete; deleting the active runner immediately."
+            )
+            & $PSCommandPath down --now
+            if ($LASTEXITCODE -ne 0) {
+                [Console]::Error.WriteLine(
+                    "URGENT: immediate recovery-guard cleanup also failed."
+                )
+            }
+        }
         if ($runnerExitCode -eq 0) {
             $runnerExitCode = 1
         }

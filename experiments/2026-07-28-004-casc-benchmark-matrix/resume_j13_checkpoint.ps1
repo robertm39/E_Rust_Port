@@ -63,6 +63,7 @@ $vampireSha256 = (
 $serviceRuntimeSeconds = $MaxSessionWallSeconds + 300
 $terminalCaptureAllowanceSeconds = 600
 $runnerProbeTimeoutSeconds = 90
+$recoveryGraceSeconds = 900
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 $releaseConfig = switch ($Release) {
@@ -1701,7 +1702,49 @@ finally {
         }
     }
     elseif ($runnerAcquired) {
-        Write-ResumeLog "runner_retained_for_recovery"
+        try {
+            Invoke-Runner @(
+                "guard-recovery",
+                "--grace-seconds",
+                [string]$recoveryGraceSeconds
+            ) | Out-Null
+            $guardStatus = Invoke-Runner @("status") | ConvertFrom-Json
+            if (
+                $null -eq $guardStatus.active -or
+                [string]$guardStatus.active.lifecycle -ne "guarded-recovery"
+            ) {
+                throw "Recovery guard did not retain an exact guarded runner"
+            }
+            $guardDeadline = [DateTimeOffset]::Parse(
+                [string]$guardStatus.active.delete_at,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::AssumeUniversal
+            )
+            if ($guardDeadline -le [DateTimeOffset]::UtcNow) {
+                throw "Recovery guard returned an expired deletion deadline"
+            }
+            Write-ResumeLog (
+                "runner_guarded_for_recovery grace_seconds=" +
+                "$recoveryGraceSeconds delete_at=$($guardDeadline.ToString('O'))"
+            )
+        }
+        catch {
+            Write-ResumeLog (
+                "recovery_guard_failed error=$($_.Exception.Message)"
+            )
+            try {
+                Invoke-Runner @("down", "--all") | Out-Null
+                Write-ResumeLog "recovery_guard_fallback_deleted"
+            }
+            catch {
+                Write-ResumeLog (
+                    "URGENT_recovery_guard_cleanup_failed " +
+                    "error=$($_.Exception.Message)"
+                )
+                throw
+            }
+            throw
+        }
     }
 }
 

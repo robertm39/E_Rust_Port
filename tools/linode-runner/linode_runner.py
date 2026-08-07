@@ -57,6 +57,7 @@ REAPER_MARGIN = timedelta(minutes=2)
 REMOTE_REAPER_ROOT = PurePosixPath("/root/.local/share/umlaut-linode-reaper")
 REMOTE_REAPER_SOURCE = REPO_ROOT / "tools" / "linode-runner" / "remote_reaper.py"
 REUSE_DISARM_GUARD = timedelta(seconds=30)
+DEFAULT_RECOVERY_GRACE_SECONDS = 900
 PACKAGE_MAINTENANCE_RECORD = REMOTE_ROOT / "package-maintenance-quiescence.json"
 PACKAGE_MAINTENANCE_UNITS = (
     "apt-daily.timer",
@@ -857,6 +858,22 @@ def billing_delete_at(created_at: datetime, now: datetime) -> datetime:
     return created + bucket * BILLING_HOUR - REAPER_MARGIN
 
 
+def guarded_recovery_delete_at(
+    created_at: datetime,
+    now: datetime,
+    grace_seconds: int,
+) -> datetime:
+    """Bound recovery by both elapsed grace and the paid-hour cutoff."""
+
+    if grace_seconds <= 0:
+        raise RunnerError("Recovery grace must be positive")
+    trusted_now = now.astimezone(timezone.utc)
+    return min(
+        trusted_now + timedelta(seconds=grace_seconds),
+        billing_delete_at(created_at, trusted_now),
+    )
+
+
 def load_reaper_config(*, required: bool = True) -> dict[str, Any] | None:
     if not REAPER_CONFIG.is_file():
         if required:
@@ -1004,6 +1021,13 @@ def validate_reaper_setup(api: LinodeApi) -> None:
             "Restricted reaper setup is incomplete; rerun 'init-reaper'"
         )
     parked = [state for _path, state in list_parked_states()]
+    current = load_current(required=False)
+    guarded = (
+        []
+        if current is None or current.get("lifecycle") != "guarded-recovery"
+        else [current]
+    )
+    protected = [*parked, *guarded]
     current = api.get(reaper_access_path())
     if api.last_oauth_scopes != MAIN_REAPER_SCOPES:
         actual = sorted(api.last_oauth_scopes or set())
@@ -1012,7 +1036,7 @@ def validate_reaper_setup(api: LinodeApi) -> None:
             "firewall:read_write, and linodes:read_write scopes; got "
             f"{actual}"
         )
-    validate_reaper_access(current, allowed_states=parked)
+    validate_reaper_access(current, allowed_states=protected)
     restricted = LinodeApi(token=token)
     restricted.request("HEAD", "/regions")
     if restricted.last_oauth_scopes != RESTRICTED_REAPER_SCOPES:
@@ -1021,7 +1045,7 @@ def validate_reaper_setup(api: LinodeApi) -> None:
             "Restricted reaper PAT must have exactly firewall:read_write "
             f"and linodes:read_write scopes; got {actual}"
         )
-    for state in parked:
+    for state in protected:
         for resource_path in (
             f"/linode/instances/{int(state['linode_id'])}",
             f"/networking/firewalls/{int(state['firewall_id'])}",
@@ -1029,7 +1053,8 @@ def validate_reaper_setup(api: LinodeApi) -> None:
             restricted.get(resource_path)
     print(
         f"Restricted reaper: OK ({config['username']}; "
-        f"{len(parked)} parked runner(s))"
+        f"{len(parked)} parked runner(s), "
+        f"{len(guarded)} guarded recovery runner(s))"
     )
 
 
@@ -1044,7 +1069,7 @@ def remote_reaper_unit_files(state: dict[str, Any]) -> tuple[str, str]:
     delete_at = parse_time(str(state["delete_at"]))
     on_calendar = delete_at.strftime("%Y-%m-%d %H:%M:%S UTC")
     service_text = f"""[Unit]
-Description=Delete parked Umlaut Linode {int(state['linode_id'])}
+Description=Delete leased Umlaut Linode {int(state['linode_id'])}
 
 [Service]
 Type=oneshot
@@ -1053,7 +1078,7 @@ Restart=on-failure
 RestartSec=60s
 """
     timer_text = f"""[Unit]
-Description=Billing-boundary cleanup for parked Umlaut Linode {int(state['linode_id'])}
+Description=Deadline cleanup for leased Umlaut Linode {int(state['linode_id'])}
 
 [Timer]
 OnCalendar={on_calendar}
@@ -2027,6 +2052,61 @@ def recover_interrupted_bootstrap(
     return current
 
 
+def validate_live_runner_identity(
+    api: LinodeApi,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Require the saved runner to match its exact live provider resources."""
+
+    if state.get("lifecycle") not in {"active", "guarded-recovery"}:
+        raise RunnerError(
+            "Runner identity validation requires an active or guarded runner"
+        )
+    label = state.get("label")
+    if not isinstance(label, str) or not is_managed_label(label):
+        raise RunnerError("Runner has no valid managed label")
+    try:
+        linode_id = int(state["linode_id"])
+        firewall_id = int(state["firewall_id"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RunnerError("Runner has incomplete saved resource identity") from error
+
+    live_linode = api.get(
+        f"/linode/instances/{linode_id}", allow_404=True
+    )
+    if live_linode is None:
+        raise RunnerError("Saved runner Linode no longer exists")
+    require_managed_label(live_linode.get("label"), label, "Linode")
+    if live_linode.get("status") != "running":
+        raise RunnerError(
+            f"Saved runner Linode is not running: {live_linode.get('status')!r}"
+        )
+
+    live_firewall = api.get(
+        f"/networking/firewalls/{firewall_id}", allow_404=True
+    )
+    if live_firewall is None:
+        raise RunnerError("Saved runner firewall no longer exists")
+    require_managed_label(live_firewall.get("label"), label, "firewall")
+    if live_firewall.get("status") != "enabled":
+        raise RunnerError(
+            "Saved runner firewall is not enabled: "
+            f"{live_firewall.get('status')!r}"
+        )
+
+    addresses = live_linode.get("ipv4")
+    if not isinstance(addresses, list) or state.get("ipv4") not in addresses:
+        raise RunnerError("Saved runner IPv4 does not match the live Linode")
+    for field in ("type", "region", "image"):
+        live_value = live_linode.get(field)
+        if live_value is not None and live_value != state.get(field):
+            raise RunnerError(
+                f"Saved runner {field} does not match live Linode: "
+                f"{live_value!r}"
+            )
+    return live_linode
+
+
 def provision(
     api: LinodeApi,
     *,
@@ -2149,7 +2229,7 @@ def parked_delete_at(state: dict[str, Any]) -> datetime:
     value = state.get("delete_at")
     if not isinstance(value, str):
         raise RunnerError(
-            f"Parked runner {state.get('label', '<unknown>')} has no deletion deadline"
+            f"Leased runner {state.get('label', '<unknown>')} has no deletion deadline"
         )
     return parse_time(value)
 
@@ -2221,6 +2301,22 @@ def reap_parked_state(
             allowed_existing_states=[state],
         )
     return True
+
+
+def find_reaper_state(linode_id: int) -> tuple[Path, dict[str, Any]] | None:
+    """Find an exact parked or guarded-recovery lease for the reaper."""
+
+    path = parked_state_path(linode_id)
+    if path.is_file():
+        return path, read_state_file(path)
+    current = load_current(required=False)
+    if (
+        current is not None
+        and current.get("lifecycle") == "guarded-recovery"
+        and int(current.get("linode_id", -1)) == linode_id
+    ):
+        return CURRENT_STATE, current
+    return None
 
 
 def activate_parked_runner(
@@ -2438,6 +2534,114 @@ def park_runner(api: LinodeApi, state: dict[str, Any]) -> bool:
     print(
         f"Runner parked until {state['delete_at']} UTC: "
         f"Linode {linode_id} ({state['label']})",
+        flush=True,
+    )
+    return True
+
+
+def guard_recovery(
+    api: LinodeApi,
+    state: dict[str, Any],
+    *,
+    grace_seconds: int,
+    allow_ip: str | None = None,
+) -> bool:
+    """Preserve a failed workload only behind an exact deletion lease."""
+
+    if grace_seconds <= 0:
+        raise RunnerError("--grace-seconds must be positive")
+    if state.get("lifecycle") == "guarded-recovery":
+        validate_live_runner_identity(api, state)
+        delete_at = parked_delete_at(state)
+        if api.trusted_now() >= delete_at:
+            reap_parked_state(api, CURRENT_STATE, state, force=True)
+            print("Guarded recovery deadline passed; runner deleted immediately.")
+            return False
+        print(
+            f"Runner already guarded until {format_utc(delete_at)} UTC: "
+            f"Linode {int(state['linode_id'])} ({state['label']})",
+            flush=True,
+        )
+        return True
+    if state.get("lifecycle") != "active":
+        raise RunnerError(
+            "Recovery guard requires lifecycle 'active'; "
+            f"found {state.get('lifecycle')!r}"
+        )
+
+    existing = remaining_parked_states()
+    try:
+        live = validate_live_runner_identity(api, state)
+        state["allow_cidr"] = replace_firewall_rules(api, state, allow_ip)
+        save_current(state)
+        wait_for_ssh(state)
+
+        created = live.get("created")
+        if not isinstance(created, str):
+            created = state.get("linode_created_at")
+        if not isinstance(created, str):
+            raise RunnerError("Live Linode has no trusted creation timestamp")
+        state["linode_created_at"] = format_utc(parse_time(created))
+        trusted_now = api.trusted_now()
+        delete_at = guarded_recovery_delete_at(
+            parse_time(created),
+            trusted_now,
+            grace_seconds,
+        )
+        if delete_at <= trusted_now:
+            print(
+                "Recovery cutoff has passed; deleting immediately.",
+                file=sys.stderr,
+                flush=True,
+            )
+            delete_state_resources(api, state)
+            return False
+        if load_reaper_config(required=False) is None or not reaper_token(
+            required=False
+        ):
+            print(
+                "Restricted reaper is unavailable; deleting immediately.",
+                file=sys.stderr,
+                flush=True,
+            )
+            delete_state_resources(api, state)
+            return False
+
+        state["lease_id"] = uuid.uuid4().hex
+        state["delete_at"] = format_utc(delete_at)
+        state["guarded_at"] = format_utc(trusted_now)
+        state["lifecycle"] = "guarded-recovery"
+        state["phase"] = "arming-recovery-reapers"
+        save_current(state)
+        sync_reaper_access(api, [*existing, state])
+        arm_remote_reaper(state)
+        state["phase"] = "guarded-recovery"
+        save_current(state)
+    except BaseException:
+        try:
+            sync_reaper_access(
+                api,
+                existing,
+                allowed_existing_states=[state],
+            )
+        except Exception as access_error:
+            print(
+                f"URGENT: could not roll back recovery reaper access: "
+                f"{access_error}",
+                file=sys.stderr,
+            )
+        try:
+            delete_state_resources(api, state)
+        except Exception as cleanup_error:
+            print(
+                f"URGENT: recovery guard cleanup also failed: {cleanup_error}",
+                file=sys.stderr,
+            )
+        raise
+
+    print(
+        f"Runner guarded until {state['delete_at']} UTC: "
+        f"Linode {int(state['linode_id'])} ({state['label']})",
         flush=True,
     )
     return True
@@ -2856,6 +3060,17 @@ def parser() -> argparse.ArgumentParser:
         "refresh-ip", help="replace the firewall SSH source address"
     )
     refresh.add_argument("--allow-ip")
+    guard = commands.add_parser(
+        "guard-recovery",
+        help="retain the active runner behind a hard deletion deadline",
+    )
+    guard.add_argument(
+        "--grace-seconds",
+        type=int,
+        default=DEFAULT_RECOVERY_GRACE_SECONDS,
+        help="maximum guarded recovery interval",
+    )
+    guard.add_argument("--allow-ip")
     run = commands.add_parser(
         "run", help="acquire, sync, build/profile, collect, and park"
     )
@@ -2994,6 +3209,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(result.stderr, end="", file=sys.stderr)
         elif arguments.command == "refresh-ip":
             refresh_firewall(api, load_current(), arguments.allow_ip)
+        elif arguments.command == "guard-recovery":
+            guard_recovery(
+                api,
+                load_current(),
+                grace_seconds=arguments.grace_seconds,
+                allow_ip=arguments.allow_ip,
+            )
         elif arguments.command == "down":
             if arguments.all:
                 current = load_current(required=False)
@@ -3007,7 +3229,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     sync_reaper_access(api, [])
                 print("Active and parked runners deleted.")
             elif arguments.now:
-                delete_state_resources(api, load_current())
+                current = load_current()
+                delete_state_resources(api, current)
+                if load_reaper_config(
+                    required=False
+                ) is not None and reaper_token(required=False):
+                    sync_reaper_access(
+                        api,
+                        remaining_parked_states(),
+                        allowed_existing_states=[current],
+                    )
                 print("Runner and firewall deleted.")
             elif park_runner(api, load_current()):
                 print("Runner is available for billing-aware reuse.")
@@ -3026,21 +3257,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 required_seconds=arguments.required_seconds,
             )
         elif arguments.command == "reap":
-            path = parked_state_path(arguments.linode_id)
             with lifecycle_lock():
-                if not path.is_file():
-                    print("Parked runner is already absent.")
+                found = find_reaper_state(arguments.linode_id)
+                if found is None:
+                    print("Leased runner is already absent.")
                 else:
-                    parked = read_state_file(path)
+                    path, parked = found
                     if reap_parked_state(
                         api,
                         path,
                         parked,
                         lease_id=arguments.lease_id,
                     ):
-                        print("Parked runner and firewall deleted.")
+                        print("Leased runner and firewall deleted.")
                     else:
-                        print("Parked runner lease is stale or not yet due.")
+                        print("Runner lease is stale or not yet due.")
         elif arguments.command == "gc":
             garbage_collect(
                 api,

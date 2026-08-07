@@ -1799,12 +1799,38 @@ class BillingLifecycleTests(unittest.TestCase):
             created + timedelta(hours=2, minutes=58),
         )
 
+    def test_guarded_recovery_deadline_uses_grace_or_paid_hour_cutoff(self):
+        created = datetime(2026, 8, 1, 12, tzinfo=timezone.utc)
+        self.assertEqual(
+            runner.guarded_recovery_delete_at(
+                created,
+                created + timedelta(minutes=10),
+                900,
+            ),
+            created + timedelta(minutes=25),
+        )
+        self.assertEqual(
+            runner.guarded_recovery_delete_at(
+                created,
+                created + timedelta(minutes=50),
+                900,
+            ),
+            created + timedelta(minutes=58),
+        )
+        with self.assertRaisesRegex(runner.RunnerError, "grace must be positive"):
+            runner.guarded_recovery_delete_at(created, created, 0)
+
     def test_cli_exposes_default_park_and_explicit_immediate_teardown(self):
         default = runner.parser().parse_args(["down"])
         self.assertFalse(default.now)
         self.assertFalse(default.all)
         self.assertTrue(runner.parser().parse_args(["down", "--now"]).now)
         self.assertTrue(runner.parser().parse_args(["down", "--all"]).all)
+        guarded = runner.parser().parse_args(["guard-recovery"])
+        self.assertEqual(
+            guarded.grace_seconds,
+            runner.DEFAULT_RECOVERY_GRACE_SECONDS,
+        )
 
     def test_exact_configuration_match_is_required(self):
         state = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
@@ -2009,6 +2035,190 @@ class BillingLifecycleTests(unittest.TestCase):
                 self.assertFalse(runner.park_runner(api, active))
             delete.assert_called_once()
 
+    def test_guard_recovery_preserves_workspace_and_arms_exact_deadline(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            patches = self.path_patches(root)
+            active = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+            active["lifecycle"] = "active"
+            active["phase"] = "synced"
+            active.pop("lease_id")
+            active.pop("delete_at")
+            with (
+                patches[0],
+                patches[1],
+                patches[2],
+                patches[3],
+                patches[4],
+                mock.patch.object(
+                    runner,
+                    "validate_live_runner_identity",
+                    return_value={"created": "2026-08-01T12:00:00+00:00"},
+                ),
+                mock.patch.object(
+                    runner,
+                    "replace_firewall_rules",
+                    return_value="198.51.100.4/32",
+                ),
+                mock.patch.object(runner, "wait_for_ssh"),
+                mock.patch.object(
+                    runner,
+                    "load_reaper_config",
+                    return_value={"username": "reaper-user"},
+                ),
+                mock.patch.object(runner, "reaper_token", return_value="secret"),
+                mock.patch.object(runner, "sync_reaper_access") as sync_access,
+                mock.patch.object(runner, "arm_remote_reaper") as arm,
+                mock.patch.object(runner, "cleanup_remote_workspace") as cleanup,
+            ):
+                write_json(runner.CURRENT_STATE, active)
+                api = mock.Mock()
+                api.trusted_now.return_value = self.NOW
+                self.assertTrue(
+                    runner.guard_recovery(
+                        api,
+                        active,
+                        grace_seconds=900,
+                        allow_ip="198.51.100.4",
+                    )
+                )
+                saved = runner.read_state_file(runner.CURRENT_STATE)
+            self.assertEqual(saved["lifecycle"], "guarded-recovery")
+            self.assertEqual(saved["phase"], "guarded-recovery")
+            self.assertEqual(saved["delete_at"], "2026-08-01T12:25:00+00:00")
+            self.assertEqual(saved["allow_cidr"], "198.51.100.4/32")
+            self.assertRegex(saved["lease_id"], r"^[0-9a-f]{32}$")
+            sync_access.assert_called_once()
+            arm.assert_called_once()
+            cleanup.assert_not_called()
+
+    def test_guard_recovery_deletes_if_reapers_are_unavailable(self):
+        active = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+        active["lifecycle"] = "active"
+        active.pop("lease_id")
+        active.pop("delete_at")
+        with (
+            mock.patch.object(
+                runner,
+                "validate_live_runner_identity",
+                return_value={"created": "2026-08-01T12:00:00+00:00"},
+            ),
+            mock.patch.object(
+                runner,
+                "replace_firewall_rules",
+                return_value="198.51.100.4/32",
+            ),
+            mock.patch.object(runner, "save_current"),
+            mock.patch.object(runner, "wait_for_ssh"),
+            mock.patch.object(runner, "load_reaper_config", return_value=None),
+            mock.patch.object(runner, "reaper_token", return_value=None),
+            mock.patch.object(runner, "delete_state_resources") as delete,
+        ):
+            api = mock.Mock()
+            api.trusted_now.return_value = self.NOW
+            self.assertFalse(
+                runner.guard_recovery(api, active, grace_seconds=900)
+            )
+        delete.assert_called_once_with(api, active)
+
+    def test_guard_recovery_arming_failure_deletes_instead_of_retaining(self):
+        active = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+        active["lifecycle"] = "active"
+        active.pop("lease_id")
+        active.pop("delete_at")
+        with (
+            mock.patch.object(
+                runner,
+                "validate_live_runner_identity",
+                return_value={"created": "2026-08-01T12:00:00+00:00"},
+            ),
+            mock.patch.object(
+                runner,
+                "replace_firewall_rules",
+                return_value="198.51.100.4/32",
+            ),
+            mock.patch.object(runner, "save_current"),
+            mock.patch.object(runner, "wait_for_ssh"),
+            mock.patch.object(
+                runner,
+                "load_reaper_config",
+                return_value={"username": "reaper-user"},
+            ),
+            mock.patch.object(runner, "reaper_token", return_value="secret"),
+            mock.patch.object(runner, "sync_reaper_access"),
+            mock.patch.object(
+                runner,
+                "arm_remote_reaper",
+                side_effect=runner.RunnerError("arm failed"),
+            ),
+            mock.patch.object(runner, "delete_state_resources") as delete,
+            self.assertRaisesRegex(runner.RunnerError, "arm failed"),
+        ):
+            api = mock.Mock()
+            api.trusted_now.return_value = self.NOW
+            runner.guard_recovery(api, active, grace_seconds=900)
+        delete.assert_called_once_with(api, active)
+
+    def test_exact_live_identity_mismatch_blocks_recovery_guard(self):
+        state = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+        state["lifecycle"] = "active"
+        api = FakeApi(
+            {
+                "/linode/instances/7": {
+                    "label": "e-rust-codex-wrong",
+                    "status": "running",
+                }
+            }
+        )
+        with self.assertRaisesRegex(runner.RunnerError, "does not match saved label"):
+            runner.validate_live_runner_identity(api, state)
+
+    def test_reaper_finds_guarded_current_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            patches = self.path_patches(root)
+            guarded = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+            guarded["lifecycle"] = "guarded-recovery"
+            guarded["phase"] = "guarded-recovery"
+            with patches[0], patches[1], patches[2], patches[3], patches[4]:
+                write_json(runner.CURRENT_STATE, guarded)
+                found = runner.find_reaper_state(7)
+            self.assertIsNotNone(found)
+            assert found is not None
+            self.assertEqual(found[0], root / "current.json")
+            self.assertEqual(found[1]["lease_id"], guarded["lease_id"])
+
+    def test_immediate_down_revokes_guarded_reaper_access(self):
+        guarded = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
+        guarded["lifecycle"] = "guarded-recovery"
+        parked = self.state(8, delete_at=self.NOW + timedelta(minutes=25))
+        api = mock.Mock()
+        with (
+            mock.patch.object(runner, "LinodeApi", return_value=api),
+            mock.patch.object(runner, "load_current", return_value=guarded),
+            mock.patch.object(runner, "delete_state_resources") as delete,
+            mock.patch.object(
+                runner,
+                "load_reaper_config",
+                return_value={"username": "reaper-user"},
+            ),
+            mock.patch.object(runner, "reaper_token", return_value="secret"),
+            mock.patch.object(
+                runner,
+                "remaining_parked_states",
+                return_value=[parked],
+            ),
+            mock.patch.object(runner, "sync_reaper_access") as sync_access,
+            mock.patch("sys.stdout", new_callable=StringIO),
+        ):
+            self.assertEqual(runner.main(["down", "--now"]), 0)
+        delete.assert_called_once_with(api, guarded)
+        sync_access.assert_called_once_with(
+            api,
+            [parked],
+            allowed_existing_states=[guarded],
+        )
+
     def test_remote_timer_is_persistent_and_uses_exact_runner_state(self):
         state = self.state(7, delete_at=self.NOW + timedelta(minutes=20))
         service, timer = runner.remote_reaper_unit_files(state)
@@ -2138,6 +2348,19 @@ class BillingLifecycleTests(unittest.TestCase):
 
 
 class DocumentationTests(unittest.TestCase):
+    def test_wrapper_schedules_guarded_recovery_reapers(self):
+        repo_root = MODULE_PATH.parents[2]
+        wrapper = (repo_root / "linode-runner.ps1").read_text(encoding="utf-8")
+        self.assertIn('"guard-recovery"', wrapper)
+        self.assertIn(
+            '$currentState.lifecycle -eq "guarded-recovery"',
+            wrapper,
+        )
+        self.assertIn(
+            'Recovery guard is incomplete; deleting the active runner immediately.',
+            wrapper,
+        )
+
     def test_runbook_contains_high_memory_cost_and_casc_policy(self):
         repo_root = MODULE_PATH.parents[2]
         runbook = (repo_root / "docs" / "linode-runner.md").read_text(

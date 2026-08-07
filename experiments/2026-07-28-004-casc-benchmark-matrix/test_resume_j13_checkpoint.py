@@ -130,12 +130,16 @@ class CascResumeControllerProbeTests(unittest.TestCase):
             self.source,
         )
 
-    def test_probe_failure_retains_launched_runner_for_recovery(self) -> None:
+    def test_probe_failure_guards_or_deletes_launched_runner(self) -> None:
         self.assertIn('Write-ResumeLog "controller_failed error=', self.source)
         self.assertIn(
-            'Write-ResumeLog "runner_retained_for_recovery"',
+            '"guard-recovery",',
             self.source,
         )
+        self.assertIn('$recoveryGraceSeconds = 900', self.source)
+        self.assertIn('"runner_guarded_for_recovery grace_seconds="', self.source)
+        self.assertIn('Write-ResumeLog "recovery_guard_fallback_deleted"', self.source)
+        self.assertNotIn('Write-ResumeLog "runner_retained_for_recovery"', self.source)
 
     def test_capture_removes_only_unreferenced_complete_stream_pairs(self) -> None:
         capture_start = self.source.index('$captureCommand = @"')
