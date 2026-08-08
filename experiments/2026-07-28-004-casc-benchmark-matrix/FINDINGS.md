@@ -2577,14 +2577,147 @@ slice.  CASC-2025 still lacks 4,836 records; with completed J13 included, the
 matrix is 3,666/8,502 and Bead `E_Rust_Port-9jt.2.7` remains in progress.  The
 next guarded slice must resume CASC-2025 from this exact checkpoint.
 
+## Verified third CASC-2025 checkpoint at 1,307 results
+
+Question: did the third guarded CASC-2025 slice restore the exact 966-result
+predecessor, retain a single service identity, capture every completed result
+at an odd solver boundary, and safely remove its managed provider resources?
+The answer is yes.  Plan
+`.artifacts/casc-benchmark/casc2025-966-next-resume-plan-260808T1045Z.json`,
+SHA-256
+`166969e0d20a393db07cf3ffc8fb8824be34fabb99de08d12741ac4e3adb76a4`,
+selected CASC-2025 at 966/5,802 with a 14,400-second batch wall and 300-second
+service margin.  Trusted allowance at 2026-08-08T10:45:51Z was 108,000
+seconds versus 14,700 required and 18,000 billed.  The audited self-disabling
+task `Umlaut-CASC-CASC2025-Resume-20260808T105051Z` launched runner
+`260808-105141-c593`, label `e-rust-codex-260808-105141-c593`, Linode
+`102483090`, firewall `112737032`, and IPv4 `172.236.122.207` on
+`g7-highmem-8` in `us-ord`.  The uploaded 4,187-file/8.9 MiB source snapshot
+SHA-256 was
+`d4af6e93327f8ea82e3a0b2d89aa4581b69157f98fa15c78ee24d00ea62c2d29`;
+package-maintenance quiescence was bound to SHA-256
+`33baebda1b54ad604d05d96afaadf064add9cff274e7dab54c59013bcbc93cd5`.
+All corpus, exact 966-result checkpoint, frozen Umlaut, pinned Vampire,
+2,901-problem/2,425-axiom extraction, contract, report, inventory, maintenance,
+and strict cgroup-v2 preflights passed.
+
+Service `casc2025-v2-resume-260808-105141-c593.service` started with MainPID
+`4011`, invocation `013fb8bbadf742c3bc8ca1842bb653d8`, and no restart.
+The identity remained fixed through termination.  Its terminal journal has one
+boot, `b45160633d774e1db86f9d1eceb92768`, one invocation, and 346 records.
+Sequence `19806` is the unique contract record for
+`e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa`
+with 341 new and 966 resumed results; sequence `19807` is the unique systemd
+success record.  Final properties are `Result=success`, `ExecMainStatus=0`,
+`NRestarts=0`, and inactive/dead.  Capture removed zero incomplete artifact
+pairs and regenerated reports at exactly 1,307/5,802 CASC-2025, 2,700/2,700
+CASC-J13, and 4,007/8,502 combined results.
+
+The ignored successor is
+`.artifacts/casc-benchmark/casc2025-checkpoint-260808-105141-c593.tar.gz`:
+61,129,422 bytes with SHA-256
+`4b14aa72c2955297f6860b91cc354808275cf0bc95ffea4a3737f19899dc66cf`.
+Its 13 regular outer members bind 12 hashes and a unique sorted 1,307-path
+result inventory, SHA-256
+`c175b46d96df86492cf975627557762116b9fae18e470cc20d696e061194e57e`.
+The nested archive is 77,938,384 bytes with 12,121 regular members and SHA-256
+`e76952053425a2cea53f2c8d9dadef2761250ead68747045801c4107af48a586`.
+Captured process and service-property evidence hash respectively to
+`d8859f144972cde414510e08e02288d17a3947db07d860aae95800b8d38754ff`
+and
+`5a0ab04c556360b20aa803f359292063d3f6f95a4e90a6fe27fb2c38ae57baee`.
+
+Strict independent validation reproduced contract-file SHA-256
+`f895aa07141b091060f3ee46d28f91abd6f484f3ad690630af08a7dbe34284c5`,
+manifest SHA-256
+`31c9a99e4b34b56352b3311f3efe5c97f728fd078783085e1811d83eec271f6d`,
+654 Umlaut plus 653 Vampire records, seven session records, and CASC-2025
+summary SHA-256
+`c34f796dff25757bc29597698142014ac644d576368694df5ebec6d99acbb162`.
+It also reproduced the embedded combined boundary and combined summary SHA-256
+`71e610a2cc2ef5c578aa0f78140c742e5ec7b3d4a019ee1ae0f0f37c081db69e`.
+Controller and independent validation sidecars are byte-identical, 2,333
+bytes, with SHA-256
+`758daa1dbad5f3a8e65f30b1967b392391419c8da1ea5753376ccd7bba928298`.
+
+Reproduction from the repository root is:
+
+```powershell
+.\.venv\Scripts\python.exe -u `
+  experiments/2026-07-28-004-casc-benchmark-matrix/validate_casc_checkpoint.py `
+  --archive .artifacts/casc-benchmark/casc2025-checkpoint-260808-105141-c593.tar.gz `
+  --archive-sha256 4b14aa72c2955297f6860b91cc354808275cf0bc95ffea4a3737f19899dc66cf `
+  --manifest benchmarks/casc_2025_manifest.jsonl `
+  --run-name casc30-2025-089e06c8-v2 `
+  --contract-id e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa `
+  --expected-results 1307 `
+  --combined-run CASC-2025 benchmarks/casc_2025_manifest.jsonl `
+    casc30-2025-089e06c8-v2 `
+    e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa `
+  --combined-run CASC-J13 benchmarks/casc_2026_manifest.jsonl `
+    casc-j13-2026-089e06c8-v2 `
+    9f29cac72abe79a5a0b31f5135412243f95ec344b5152eadc3d372ac49e8c676 `
+  --output .artifacts/casc-benchmark/casc2025-checkpoint-260808-105141-c593.independent-validation.json
+.\experiments\2026-07-28-004-casc-benchmark-matrix\audit_casc_checkpoint.ps1 `
+  -Archive .artifacts\casc-benchmark\casc2025-checkpoint-260808-105141-c593.tar.gz `
+  -ArchiveSha256 4b14aa72c2955297f6860b91cc354808275cf0bc95ffea4a3737f19899dc66cf `
+  -RunName casc30-2025-089e06c8-v2 `
+  -ExpectedResults 1307 `
+  -ContractId e71fc642a15db4528fb915724493b7571798fe40848a4fe0085e62723918d1aa `
+  -ExpectedNewResults 341 `
+  -ExpectedResumedResults 966 `
+  -ExpectedContractSequence 19806 `
+  -ExpectedSuccessSequence 19807 `
+  -ExpectedBootId b45160633d774e1db86f9d1eceb92768 `
+  -ExpectedInvocationId 013fb8bbadf742c3bc8ca1842bb653d8 `
+  -ExtractionRoot C:\tmp\umlaut-casc-audit-casc2025-260808-1513 `
+  -Output .artifacts\casc-benchmark\casc2025-checkpoint-260808-105141-c593.raw-audit.json
+.\.venv\Scripts\python.exe -u `
+  experiments/2026-07-28-004-casc-benchmark-matrix/plan_next_casc_resume.py `
+  --checkpoint .artifacts/casc-benchmark/casc2025-checkpoint-260808-105141-c593.tar.gz `
+  --checkpoint-sha256 4b14aa72c2955297f6860b91cc354808275cf0bc95ffea4a3737f19899dc66cf `
+  --inspect-only `
+  --output .artifacts/casc-benchmark/casc2025-next-inspect-260808T1515Z.json
+.\linode-runner.ps1 status
+.\linode-runner.ps1 check
+.\linode-runner.ps1 gc --older-than-hours 1
+```
+
+The reusable raw auditor found 1,307 coordinates, 2,614 referenced streams,
+zero missing/mismatched/orphan streams, seven session records, 346 journal
+records, no standalone batch/Umlaut/Vampire process, and empty cgroup/unit
+residue.  Its ignored JSON output is 858 bytes with SHA-256
+`c3a7fff98abecd2c8d18d9de64b1f7fe33dc15cc2faac702b79a3efba57c1f6d`.
+Two historical results report `orphan_cleanup_required=true`; these record
+successful per-run cleanup rather than surviving residue.  As a falsification
+check, the auditor rejected an all-zero archive hash before creating either
+its fresh extraction root or output file.
+
+The controller verified the archive before deleting exact Linode `102483090`
+and firewall `112737032`, then recorded `managed_resources_deleted`.  Fresh
+runner status is `active: null` with no parked runner; provider check reports
+zero restricted-reaper resources; dry GC finds no stale managed resource.  The
+self-disabled task has last result zero, and its launch log ends with
+`controller_invocation_completed` followed by `task_launch_completed`.
+
+Inspect-only output
+`.artifacts/casc-benchmark/casc2025-next-inspect-260808T1515Z.json`, SHA-256
+`fd96f2e076d835dfb4cb7838ba271a13d610847b095a8e03215f74f936cdbcdf`,
+selects outer and next release `casc2025` at exactly 1,307/5,802 with status
+`resume_candidate`.  Conclusion: this is a complete, quiescent, independently
+reproducible successor with safe provider teardown.  It accepts only this
+slice.  CASC-2025 still lacks 4,495 records; with completed J13 included, the
+matrix is 4,007/8,502 and Bead `E_Rust_Port-9jt.2.7` remains in progress.  The
+next guarded slice must resume CASC-2025 from this exact checkpoint.
+
 ## Remaining acceptance boundary
 
 The guarded campaign has now validated program construction, separate ignored
 inputs, binary and corpus hashes, eight-core/128 GiB execution, cgroup
 accounting, SZS extraction, atomic results, repeated exact resume, report
 generation, artifact transfer, and cleanup across all 1,350 J13 problems and
-both solvers, plus the first 483 CASC-2025 problems for both solvers.  Gate
+both solvers, plus 654 Umlaut and 653 Vampire CASC-2025 executions.  Gate
 `E_Rust_Port-9jt.2.7` still preserves the broader full-run acceptance work:
-2,418 CASC-2025 problems for both solvers remain.  The J13 portion is complete
-at 2,700 records; 966/5,802 CASC-2025 records are complete, leaving 4,836
-CASC-2025 executions and the final complete combined reports outstanding.
+2,247 Umlaut and 2,248 Vampire CASC-2025 executions remain.  The J13 portion is
+complete at 2,700 records; 1,307/5,802 CASC-2025 records are complete, leaving
+4,495 CASC-2025 executions and the final complete combined reports outstanding.
